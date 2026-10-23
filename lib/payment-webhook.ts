@@ -1,5 +1,6 @@
-import {createHash,timingSafeEqual} from 'node:crypto';
+import {createHash,randomUUID,timingSafeEqual} from 'node:crypto';
 import {NotificationError,parseBankNotification,type BankNotification} from './bank-notification';
+import type {PaymentLogEvent} from './payment-telegram';
 
 type Env=Record<string,string|undefined>;
 type Value={stringValue?:string;integerValue?:string;booleanValue?:boolean;timestampValue?:string};
@@ -89,18 +90,23 @@ async function boundedBody(request:Request){
  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>16000){await reader.cancel();throw new RangeError('Body too large.');}chunks.push(value);}}finally{reader.releaseLock();}
  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
 }
-export async function bankWebhook(request:Request,env:Env=process.env){
+export async function bankWebhook(request:Request,env:Env=process.env,onLog?:(event:PaymentLogEvent)=>void){
  const secret=env.PAYMENT_WEBHOOK_SECRET||'';
  if(!/^[A-Za-z0-9_-]{32,256}$/.test(secret))return json({error:'Webhook chưa được cấu hình.'},503);
  const supplied=request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/)?.[1]||'';
  if(supplied.length!==secret.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(secret)))return json({error:'Không được phép.'},401);
+ const requestId=randomUUID(),receivedAt=new Date().toISOString();let parsed:BankNotification|undefined;
+ function respond(value:PaymentLogEvent['result'],status=200,notification?:string){
+  try{onLog?.({requestId,receivedAt,httpStatus:status,result:value,notification,parsed});}catch{console.warn('[payment-telegram] scheduling_failed');}
+  return json(value,status);
+ }
  const kind=request.headers.get('content-type')?.split(';')[0].toLowerCase();
- if(kind!=='application/json'&&kind!=='text/plain')return json({error:'Dùng application/json hoặc text/plain.'},415);
+ if(kind!=='application/json'&&kind!=='text/plain')return respond({error:'Dùng application/json hoặc text/plain.'},415);
  let raw:string;
  try{
   const body=await boundedBody(request);
-  if(kind==='application/json'){const data=JSON.parse(body);if(!data||Array.isArray(data)||Object.keys(data).length!==1||typeof data.notification!=='string')return json({error:'JSON cần duy nhất trường notification kiểu văn bản.'},400);raw=data.notification;}else raw=body;
- }catch(error){return json({error:error instanceof RangeError?'Thông báo quá dài.':'Nội dung yêu cầu chưa hợp lệ.'},error instanceof RangeError?413:400);}
- try{return json(await settle(configuration(env),parseBankNotification(raw),raw));}
- catch(error){if(error instanceof NotificationError)return json({status:'unmatched',reason:'notification_not_supported',message:error.message},422);return json({error:'Chưa xử lý được. Kiểm tra cấu hình kết nối, quyền Rules và thử gửi lại cùng thông báo.'},503);}
+  if(kind==='application/json'){const data=JSON.parse(body);if(!data||Array.isArray(data)||Object.keys(data).length!==1||typeof data.notification!=='string')return respond({error:'JSON cần duy nhất trường notification kiểu văn bản.'},400);raw=data.notification;}else raw=body;
+ }catch(error){return respond({error:error instanceof RangeError?'Thông báo quá dài.':'Nội dung yêu cầu chưa hợp lệ.'},error instanceof RangeError?413:400);}
+ try{const config=configuration(env);parsed=parseBankNotification(raw,new Date(receivedAt));return respond(await settle(config,parsed,raw),200,raw);}
+ catch(error){if(error instanceof NotificationError)return respond({status:'unmatched',reason:'notification_not_supported',message:error.message},422,raw);return respond({error:'Chưa xử lý được. Kiểm tra cấu hình kết nối, quyền Rules và thử gửi lại cùng thông báo.'},503,raw);}
 }
