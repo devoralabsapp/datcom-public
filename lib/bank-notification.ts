@@ -7,14 +7,19 @@ function uniqueField(text:string,labels:string){
  const values=[...text.matchAll(expression)].map(m=>m[1].trim());
  if(values.length!==1)throw new NotificationError('Thông báo thiếu hoặc trùng trường bắt buộc.');return values[0];
 }
-function techcombankText(raw:string){
+export function singleTechcombankNotice(raw:string){
  const original=raw.normalize('NFC').replace(/\r\n?/g,'\n').trim();
- if(!/^\+[ \t]*VND[ \t]+\d/iu.test(original))return {source:original,currencyFirst:false};
+ if(!/^\+[ \t]*VND[ \t]+\d/iu.test(original))return original;
  // Some Shortcut inputs concatenate the entire notification several times.
  // Collapse only identical complete blocks; never discard conflicting fields.
  const blocks=original.split(/(?=\+[ \t]*VND[ \t]+\d)/iu).map(value=>value.trim()).filter(Boolean);
  if(blocks.length>8||blocks.some(value=>value!==blocks[0]))throw new NotificationError('Thông báo ghép nhiều giao dịch hoặc các bản lặp không giống nhau.');
- const source=blocks[0],header=/^\+[ \t]*VND[ \t]+(\d[\d,.]*)[ \t]*(?:\n|(?=Account[ \t]*:))/iu.exec(source);
+ return blocks[0];
+}
+function techcombankText(raw:string){
+ const source=singleTechcombankNotice(raw);
+ if(!/^\+[ \t]*VND[ \t]+\d/iu.test(source))return {source,currencyFirst:false};
+ const header=/^\+[ \t]*VND[ \t]+(\d[\d,.]*)[ \t]*(?:\n|(?=Account[ \t]*:))/iu.exec(source);
  if(!header)throw new NotificationError('Dòng số tiền Techcombank chưa hợp lệ.');
  return {source:'Amount: + '+header[1]+' VND\n'+source.slice(header[0].length),currencyFirst:true};
 }
