@@ -67,7 +67,7 @@ Tests use local Firebase Auth and Firestore emulators with a `demo-` project, no
 - [Setup and Vercel deployment](docs/setup.md) — English
 - [Payment integration and Telegram logs](docs/payment-integration.md) — English
 - [Multiple dishes, payment differences, refunds and restaurant sharing](docs/orders-payments-sharing.md) — English / Tiếng Việt
-- [Carryover credit and administrator activity history](docs/credit-and-activity.md) — English / Tiếng Việt
+- [Carryover credit and activity history](docs/credit-and-activity.md) — English / Tiếng Việt
 - [Localization guide](docs/localization.md) — English
 - [Detailed application and operations guide](README.vi.md) — Tiếng Việt
 - [Firebase/Vercel deployment notes](docs/deploy-vercel.md) — Tiếng Việt
@@ -81,3 +81,5 @@ Development has been assisted by OpenAI Codex. Changes still require maintainer 
 Original application code is available under the [MIT license](LICENSE). Dependencies retain their own licenses. External food photographs are illustrative assets linked from HelloFresh, feedthepudge, and Saigon Sisters; their respective owners retain rights. Replace them with your own or appropriately licensed images for your deployment.
 
 - [Order-list totals, personal grouped payment and reconciliation privacy](docs/order-list-payments.md) — English / Tiếng Việt
+
+- [Personal activity history, access rules and index setup](docs/activity-history.md) — English / Tiếng Việt

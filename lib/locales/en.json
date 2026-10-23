@@ -752,5 +752,16 @@
   "Thanh toán các đơn của bạn đang hiển thị trong ngày đã chọn.": "Pay your orders currently shown for the selected day.",
   "Xem {0} đơn chưa thanh toán": "View {0} unpaid orders",
   "Bạn có {0} đơn cần thanh toán": "You have {0} orders to pay",
-  "Thử lại tạo QR": "Retry QR creation"
+  "Thử lại tạo QR": "Retry QR creation",
+  "Góc bữa trưa": "Lunch corner",
+  "Nhật ký của tôi": "My activity",
+  "Quản trị xem được hoạt động của tất cả tài khoản.": "Administrators can view activity from all accounts.",
+  "Bạn chỉ xem được các hoạt động do tài khoản của mình thực hiện.": "You can only view actions performed by your own account.",
+  "Tìm kiếm và bộ lọc áp dụng cho {0} bản ghi đã tải.": "Search and filters apply to the {0} loaded entries.",
+  "Nhật ký cá nhân đang được chuẩn bị. Vui lòng thử lại sau.": "Your activity history is being prepared. Please try again later.",
+  "Theo dõi các hoạt động đặt cơm và thanh toán của bạn.": "Review your ordering and payment activity.",
+  "Kết nối ngân hàng": "Bank integration",
+  "Bạn": "You",
+  "Đang tải nhật ký…": "Loading activity…",
+  "Ẩn chi tiết": "Hide details"
 }

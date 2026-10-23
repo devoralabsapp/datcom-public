@@ -1,5 +1,6 @@
 import {applyCredit,chooseSurplus,creditBalances,CreditCoveredError} from '../lib/credit-client';
 import {activityValue,recordActivity} from '../lib/activity';
+import {readActivityPage,readActivityNames} from '../lib/activity-reader';
 import {summarizeStatistics} from '../lib/statistics';
 import {orderFinance} from '../lib/order-finance';
 import test from 'node:test';
@@ -7,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {initializeApp,deleteApp,type FirebaseApp} from 'firebase/app';
 import {getAuth,connectAuthEmulator,signInAnonymously,signInWithCredential,linkWithCredential,GoogleAuthProvider} from 'firebase/auth';
-import {getFirestore,connectFirestoreEmulator,doc,getDoc,getDocs,collection,query,where,orderBy,setDoc,updateDoc,deleteDoc,deleteField,writeBatch,serverTimestamp,Timestamp,terminate,setLogLevel,type Firestore} from 'firebase/firestore';
+import {getFirestore,connectFirestoreEmulator,doc,getDoc,getDocs,collection,query,where,orderBy,limit,setDoc,updateDoc,deleteDoc,deleteField,writeBatch,serverTimestamp,Timestamp,terminate,setLogLevel,type Firestore} from 'firebase/firestore';
 import {initializeTestEnvironment,assertFails,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {MealClient} from '../lib/meal-client';
 import type {Auth} from 'firebase/auth';
@@ -502,15 +503,29 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    const from=guest.auth.currentUser!.uid,to=target.auth.currentUser!.uid;await setDoc(doc(guest.db,'accountLinks',from),{targetUid:to,createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+300000)});await moveGuestOrders(target.db,from,to);assert.equal((await creditBalances(target))[to],50000);
    const order=await target.write({action:'order',dayId:nextDay,name:name2,items:[{dish:menu[0].name,quantity:1}]});assert.equal(order.orders.find(o=>o.name===name2)?.paid,true);assert.equal(order.creditBalances?.[to],10000);
   });
-  await t.test('activity history is admin-only, immutable, identity-bound and includes dish changes without secrets',async()=>{
+  await t.test('activity history is owner-scoped, immutable, identity-bound and includes dish changes without secrets',async()=>{
    const payer=await client('audit-owner'),dayId='day-2099-11-01';await admin.write({action:'day',create:true,date:'2099-11-01',menu,status:'open'});
    const p=await payer.write({action:'order',dayId,name:'Nhật ký mẫu',dish:menu[0].name,quantity:2,note:'Không hành'}),id=p.orders[0].id;await payer.write({action:'order',dayId,id,name:'Nhật ký mẫu',dish:menu[1].name,quantity:3,note:'Ít cơm'});await payer.write({action:'cancel',dayId,id});
    await recordActivity(payer,{kind:'app.visit',summary:'Truy cập ứng dụng'});await assertFails(getDocs(collection(payer.db,'activityLogs')));
    const events=await getDocs(collection(admin.db,'activityLogs')),own=events.docs.filter(e=>e.data().actorId===payer.auth.currentUser!.uid);assert.ok(own.some(e=>e.data().kind==='app.visit'));const changed=own.find(e=>e.data().kind==='order.update')!,details=JSON.parse(changed.data().details);assert.equal(details.before.dish,menu[0].name);assert.equal(details.after.dish,menu[1].name);assert.equal(details.after.quantity,3);assert.ok(own.some(e=>e.data().kind==='order.cancel'));
-   await assertFails(getDoc(doc(payer.db,'activityLogs',changed.id)));await assertFails(updateDoc(changed.ref,{summary:'hacked'}));await assertFails(deleteDoc(changed.ref));
+   assert.equal((await getDoc(doc(payer.db,'activityLogs',changed.id))).data()?.actorId,payer.auth.currentUser!.uid);
+   const ownPage=await readActivityPage(payer,payer.auth.currentUser!.uid,false);assert.ok(ownPage.entries.length);assert.ok(ownPage.entries.every(e=>e.actorId===payer.auth.currentUser!.uid));
+   await assertFails(getDoc(doc(b.db,'activityLogs',changed.id)));await assertFails(getDocs(query(collection(b.db,'activityLogs'),where('actorId','==',payer.auth.currentUser!.uid),orderBy('createdAt','desc'),limit(50))));
+   await assertFails(readActivityPage(payer,payer.auth.currentUser!.uid,true));
+   const publicDb=environment.unauthenticatedContext().firestore() as unknown as Firestore;await assertFails(getDoc(doc(publicDb,'activityLogs',changed.id)));await assertFails(getDocs(query(collection(publicDb,'activityLogs'),where('actorId','==',payer.auth.currentUser!.uid))));
+   await assertFails(updateDoc(changed.ref,{summary:'hacked'}));await assertFails(deleteDoc(changed.ref));
    await assertFails(setDoc(doc(payer.db,'activityLogs','a'.repeat(32)),activityValue(admin.auth.currentUser!.uid,{kind:'app.visit',summary:'Giả danh'})));
    await assertFails(setDoc(doc(payer.db,'activityLogs','b'.repeat(32)),{...activityValue(payer.auth.currentUser!.uid,{kind:'bank.received',summary:'Giả ngân hàng'}),source:'bank'}));
    assert.ok(events.docs.some(e=>e.data().kind==='bank.received'));assert.ok(events.docs.filter(e=>e.data().source==='bank').every(e=>!e.data().details.includes('Balance:')));
+  });
+  await t.test('personal activity pagination returns only the owner and never reads other profiles',async()=>{
+   const payer=await client('activity-pager'),other=await client('activity-pager-other'),uid=payer.auth.currentUser!.uid;
+   await syncUserProfile(payer,'Người xem log mẫu');await syncUserProfile(other,'Tên riêng người khác');
+   const batch=writeBatch(payer.db);for(let i=0;i<51;i++)batch.set(doc(collection(payer.db,'activityLogs')),activityValue(uid,{kind:'page.view',summary:'Xem mục trong ứng dụng',details:{index:i}}));await batch.commit();await recordActivity(other,{kind:'app.visit',summary:'Truy cập ứng dụng'});
+   const first=await readActivityPage(payer,uid,false);assert.equal(first.entries.length,50);assert.equal(first.more,true);
+   const second=await readActivityPage(payer,uid,false,first.cursor);assert.equal(second.entries.length,1);assert.equal(second.more,false);assert.equal(new Set([...first.entries,...second.entries].map(e=>e.id)).size,51);assert.ok([...first.entries,...second.entries].every(e=>e.actorId===uid));
+   assert.deepEqual(await readActivityNames(payer,uid,false),{[uid]:'Người xem log mẫu'});await assertFails(readActivityNames(payer,uid,true));
+   assert.ok((await readActivityPage(admin,admin.auth.currentUser!.uid,true)).entries.some(e=>e.actorId!==admin.auth.currentUser!.uid));
   });
 
 

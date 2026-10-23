@@ -23,7 +23,7 @@ No Admin SDK, service-account key, Vercel OIDC, or server session secret is requ
 5. Review and publish the **entire** `firestore.rules` file. It denies unlisted collections; do not replace Rules in a database shared with unrelated apps without reviewing their access needs.
 6. Restart/rebuild after source changes, sign in again, and publish the first menu through **Edit menu**. Use VI/EN in the header to switch to English.
 
-Enabled administrators require verified Google sign-in. The primary administrator can grant/revoke other administrators after their first Google sign-in. Other administrators manage menus, orders, payments, pickup draws, and regular users' booking access. Existing queries use automatic single-field indexes; no custom composite indexes are required.
+Enabled administrators require verified Google sign-in. The primary administrator can grant/revoke other administrators after their first Google sign-in. Other administrators manage menus, orders, payments, pickup draws, and regular users' booking access. Most queries use automatic single-field indexes. Personal activity history needs the composite index in `firestore.indexes.json`; follow [activity setup](activity-history.md).
 
 ## 3. Vercel
 
@@ -55,6 +55,6 @@ For detailed Vietnamese operations, see [README.vi.md](../README.vi.md) and [dep
 
 See [orders, payment differences and restaurant sharing](orders-payments-sharing.md) for grouped QRs, resumable settlement, preserved paid amounts, administrator-confirmed refunds and expiring restaurant links. QR amounts now represent the remaining balance, which can be lower than the meal total. Publish the full updated Rules before deploying.
 
-Credit and activity history use the same Firebase project and Rules; see [credit and activity](credit-and-activity.md). Publish the full updated Rules before deploying. No extra composite index or privileged server credential is required.
+Credit and activity history use the same Firebase project and Rules; see [credit and activity](credit-and-activity.md). Publish the full updated Rules before deploying. Personal activity history requires its declared composite index; no privileged server credential is required.
 
 The order list now groups payment under My orders and restricts manual reconciliation history to owners/administrators. See [order-list payment behavior](order-list-payments.md); publish the full updated Rules before release.
