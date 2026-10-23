@@ -16,7 +16,10 @@ test('Telegram payment logs retain diagnostic content while concealing accounts,
  const bidv=paymentLogMessage({...event,notification:'Account thanh toán: 000999999999\nTransaction Amount: +40,000 VND\nEnding Balance: 9,999,999 VND\nNội dung: '+reference},env);
  assert.ok(!bidv.includes('000999999999'));assert.ok(!bidv.includes('9,999,999'));
  const currencyFirst=paymentLogMessage({...event,notification:`+ VND 50,000\nAccount: 00012345678901\nBalance: VND 52,000\n${reference}`.repeat(4)},env);
- assert.ok(!currencyFirst.includes('52,000'));assert.ok(!currencyFirst.includes('00012345678901'));assert.equal(currencyFirst.match(/đã che số dư/g)?.length,4);assert.ok(currencyFirst.includes('+ VND 50,000'));assert.ok(currencyFirst.includes(reference));
+ assert.ok(!currencyFirst.includes('52,000'));assert.ok(!currencyFirst.includes('00012345678901'));assert.equal(currencyFirst.match(/đã che số dư/g)?.length,1);assert.equal(currencyFirst.match(/\+ VND 50,000/g)?.length,1);assert.ok(currencyFirst.includes(reference));
+ const block=`+ VND 50,000\nAccount: 00012345678901\nBalance: VND 52,000\n${reference}`;
+ const conflicting=paymentLogMessage({...event,notification:block+block.replace('52,000','53,000')},env);
+ assert.equal(conflicting.match(/đã che số dư/g)?.length,2);assert.ok(!conflicting.includes('52,000'));assert.ok(!conflicting.includes('53,000'));
  for(const balance of ['Balance: VND 2,000','Balance: + VND 2,000','Balance: VND +2,000','Số dư: VND 2,000'])assert.ok(!paymentLogMessage({...event,notification:balance},env).includes('2,000'));
  const long=paymentLogMessage({...event,notification:'😀'.repeat(12000)},env);assert.ok(long.length<=4096);assert.match(long,/đã rút gọn/);
  const unmatched=paymentLogMessage({...event,parsed:undefined,result:{status:'unmatched',reason:'notification_not_supported',message:'Không tìm thấy một mã đơn duy nhất trong thông báo.'},httpStatus:422},env);assert.match(unmatched,/CHƯA XÁC NHẬN/);assert.match(unmatched,/Không tìm thấy/);assert.match(unmatched,/HTTP: 422/);

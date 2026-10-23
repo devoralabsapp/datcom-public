@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import type {BankNotification} from './bank-notification';
+import {singleTechcombankNotice,type BankNotification} from './bank-notification';
 
 type Env=Record<string,string|undefined>;
 export type PaymentLogEvent={
@@ -38,7 +38,9 @@ export function paymentLogMessage(event:PaymentLogEvent,env:Env={}){
  if(result.message||result.error)lines.push('Chi tiết: '+short(redact(result.message||result.error||'',env),500));
  if(event.notification!==undefined){
   const raw=event.notification;
-  const preview=redact(raw,env);
+  let content=raw;
+  try{content=singleTechcombankNotice(raw);}catch{/* Keep conflicting blocks visible for diagnosis. */}
+  const preview=redact(content,env);
   lines.push('Dấu thông báo: '+createHash('sha256').update(raw).digest('hex').slice(0,16),`Độ dài: ${raw.length} ký tự`,'Nội dung đã che:',short(preview,1200)+(Array.from(preview).length>1200?'\n[đã rút gọn]':''));
  }
  return short(lines.join('\n'),3500);

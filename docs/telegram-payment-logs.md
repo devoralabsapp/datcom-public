@@ -41,6 +41,8 @@ Khi đọc được thông báo, log có thêm ngân hàng, số tiền và mã 
 
 Tin được gửi sau khi API đã trả kết quả bằng `after()` của Next.js, timeout 5 giây. Telegram lỗi không sửa trạng thái đơn và không đổi phản hồi API. Có thể thấy cảnh báo `[payment-telegram]` trong Vercel Logs; cảnh báo chỉ ghi loại lỗi/trạng thái HTTP, không ghi URL chứa token. Đây là log hỗ trợ vận hành theo kiểu best effort, không phải hàng đợi đảm bảo giao tin hay sổ đối soát ngân hàng. Không tự thử gửi lại khi Telegram lỗi để tránh đăng lặp nếu tin đã tới nhưng phản hồi bị mất. Biên nhận Firestore vẫn là dữ liệu xác nhận thanh toán của ứng dụng.
 
+Nếu Shortcut ghép nhiều bản Techcombank dạng `+ VND …` giống hệt nhau, phần nội dung trong log chỉ hiển thị một bản đã che. Các đoạn khác nhau vẫn được giữ để chẩn đoán lỗi. Độ dài và dấu thông báo vẫn tính trên nguyên văn request nhận được; việc rút gọn log không thay đổi đối soát hay cơ chế chống ghi nhận trùng.
+
 ## Kiểm tra
 
 Sau khi cấu hình, gửi một thông báo thử **không có mã COM** qua Shortcut với khóa webhook hợp lệ. API trả `422`, không tích thanh toán, và channel nhận log giải thích thiếu mã. Đối chiếu mã yêu cầu, giờ nhận và dấu thông báo giữa các lần kiểm tra. Nếu không nhận log, kiểm tra hai biến Production, deployment mới nhất, Chat ID và quyền đăng bài của bot. Không cần Publish lại Firestore Rules để bật Telegram.
