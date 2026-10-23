@@ -1,4 +1,4 @@
-# Carryover credit and administrator activity history
+# Carryover credit and activity history
 
 ## Using surplus money
 
@@ -20,23 +20,23 @@ Statistics offsets are estimates, not reservations. They consider unspent credit
 
 ## Activity history
 
-Only administrators see **Activity log / Nhật ký hoạt động** and can read `activityLogs`. Entries are append-only through app Rules. The screen loads 50 entries at a time, supports loading older entries, and filters/searches the entries already loaded. Names are resolved from administrator-visible user profiles; actor UID remains available to distinguish duplicate names.
+Administrators see **Activity log / Nhật ký hoạt động** for all accounts. Regular users see **My activity / Nhật ký của tôi** and can read only entries with their own actor UID. Entries are append-only through app Rules. The screen loads 50 entries at a time, supports loading older entries, and filters/searches the entries already loaded. Names are resolved from administrator-visible user profiles; actor UID remains available to distinguish duplicate names.
 
 Recorded application actions include visits, viewed sections, Google sign-in/out, cart orders, edits/cancellations with before/after dish/quantity/price/note/money details, manual payment/refund/reversal, credit choices and transfers, QR creation, menu changes, user role/access changes, pickup draws, restaurant link creation/revocation and exports. Critical application mutations include their event in the same batch/transaction. Accepted bank receipts create their bank event atomically; duplicate/unmatched/failed authenticated notifications attempt a separate safe event without changing the payment result.
 
 Browser access telemetry is best effort and an application-visit event is deduplicated for 30 minutes in the same tab/session; section views are recorded when navigation changes or the app reloads. App-origin entries are client-reported and are **not forensic evidence**. Direct Console/SDK operations outside these application flows can bypass application logs; offline/blocked browser telemetry may be absent. The immutable bank receipts, financial adjustments and paired credit transfers remain the money ledger. Public restaurant snapshot visits are not tracked by creating anonymous visitor identities.
 
-Logs omit passwords, authentication/webhook tokens, IP addresses, raw bank notices and balances. Existing redacted Telegram payment notifications remain separate. Activity history stays in Firestore for administrators and is not automatically purged. Restaurant share events include a bounded dish preview and row count. Logs start when this version is deployed; past app visits/edits cannot be reconstructed automatically.
+Logs omit passwords, authentication/webhook tokens, IP addresses, raw bank notices and balances. Existing redacted Telegram payment notifications remain separate. Activity history stays in Firestore under actor/admin read access and is not automatically purged. Restaurant share events include a bounded dish preview and row count. Logs start when this version is deployed; past app visits/edits cannot be reconstructed automatically.
 
 ## Deployment and validation
 
-Publish the complete updated `firestore.rules` before deploying the new UI; refresh old open tabs. No service-account key, OIDC, Cloud Functions or additional composite indexes are required. The source directory uses `ownerId` single-field queries; history uses descending `createdAt` with a document cursor. Monitor Firestore reads as the credit-source history grows; this prototype reads its source pointers and current order balances rather than trusting cached money totals.
+Publish the complete updated `firestore.rules` before deploying the new UI; refresh old open tabs. No service-account key, OIDC or Cloud Functions are required. Personal ordered history needs the composite index declared in `firestore.indexes.json`; see [activity history deployment](activity-history.md). The source directory uses `ownerId` single-field queries; history uses descending `createdAt` with a document cursor. Monitor Firestore reads as the credit-source history grows; this prototype reads its source pointers and current order balances rather than trusting cached money totals.
 
-`npm test`, `npm run typecheck`, and `npm run build` validate the implementation. Emulator cases include cross-day credit, QR cash shortfalls, same-name foreign accounts, simultaneous spending, refund-choice races, forged money/paired writes, immutable ledgers, guest-to-Google ownership, administrator-only history, actor spoofing, and the ten-dish cart Rules access budget. Browser QA uses fictitious balances and local bank notifications only.
+`npm test`, `npm run typecheck`, and `npm run build` validate the implementation. Emulator cases include cross-day credit, QR cash shortfalls, same-name foreign accounts, simultaneous spending, refund-choice races, forged money/paired writes, immutable ledgers, guest-to-Google ownership, actor/admin history access, actor spoofing, and the ten-dish cart Rules access budget. Browser QA uses fictitious balances and local bank notifications only.
 
 ## Tóm tắt vận hành
 
 - Khi có tiền thừa, chọn **Hoàn lại** hoặc **Để hôm sau**. Tiền chọn giữ lại tự trừ khi đặt món/QR tiếp theo, theo tài khoản hoặc phiên khách, không theo tên.
 - Thống kê hiển thị riêng **Số dư trừ** và số **Chưa trả** đã khấu trừ. Đây là dự kiến theo kỳ; sổ sử dụng tiền được chốt khi đặt hoặc thanh toán.
 - Quản trị mở **Nhật ký hoạt động** ở menu bên trái. Tải thêm để xem các bản ghi cũ hơn; tìm kiếm trong các bản đã tải. Dữ liệu món, số suất, giá, ghi chú và tiền trước/sau nằm trong **Xem chi tiết**.
-- Log truy cập được gộp 30 phút/phiên; chỉ quản trị đọc được. Không lưu token, IP hoặc nguyên văn thông báo ngân hàng. Log thao tác ngoài ứng dụng và lịch sử trước bản triển khai này không tự xuất hiện.
+- Log truy cập được gộp 30 phút/phiên; mỗi tài khoản chỉ xem log của mình, quản trị xem toàn bộ. Không lưu token, IP hoặc nguyên văn thông báo ngân hàng. Log thao tác ngoài ứng dụng và lịch sử trước bản triển khai này không tự xuất hiện.

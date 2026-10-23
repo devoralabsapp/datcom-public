@@ -190,3 +190,36 @@ small,label small{font-size:13px;color:var(--muted)}
 .signin>.language-switcher{margin-bottom:25px}
 html[lang=en] .app-shell .sidebar .nav-item{line-height:1.5}
 @media(max-width:760px){.app-shell .topbar{flex-wrap:wrap}.app-shell .top-actions{margin-left:auto}.language-switcher{padding:0 5px;gap:3px;font-size:12px}.language-switcher>svg{display:none}.language-switcher select{max-width:100px;font-size:12px}.app-shell .breadcrumb:before{font-size:19px}.app-shell .top-actions>.icon-btn{width:32px}html[lang=en] .app-shell .nav-short-label{font-size:11px}html[lang=en] .app-shell .nav-item{padding-inline:2px}}
+
+/* Compact navigation keeps the full menu visible on standard desktop heights. */
+.app-shell .main-shell{min-width:0}
+@media(min-width:761px){
+ .app-shell .sidebar{padding:20px 12px 12px;height:100dvh;overflow-y:auto}
+ .app-shell .sidebar>.brand{margin-bottom:20px;flex-shrink:0}
+ .app-shell .nav-caption{font-family:'Be Vietnam Pro',system-ui,sans-serif;font-size:13px;font-weight:750;letter-spacing:.04em;line-height:1.5;color:var(--green);margin-bottom:9px;padding:0 12px;flex-shrink:0}
+ .app-shell .sidebar nav{flex-shrink:0}
+ .app-shell .nav-item{min-height:43px;padding:8px 10px;margin-bottom:3px;gap:10px;line-height:1.4}
+ .app-shell .nav-item svg{width:19px;height:19px}
+ .app-shell .sidebar-note{margin:16px 4px 12px;padding:12px;flex-shrink:0}
+ .app-shell .sidebar-note h3{font-size:13px;margin-bottom:5px;line-height:1.5}
+ .app-shell .sidebar-note p{font-size:12px;line-height:1.6}
+ .app-shell .sidebar-note>span:last-child{font-size:11px;margin-top:9px}
+ .app-shell .sidebar-bottom{flex-shrink:0}
+ .app-shell .workspace-label{padding:14px 4px;font-size:12px}
+ .app-shell .workspace-label small{font-size:11px;margin-top:3px}
+ .app-shell .sidebar-bottom>a{margin:8px 10px 12px;font-size:12px}
+}
+@media(min-width:761px) and (max-height:680px){
+ .app-shell .sidebar{padding-top:14px;padding-bottom:8px}
+ .app-shell .sidebar>.brand{margin-bottom:12px}
+ .app-shell .nav-caption{margin-bottom:6px}
+ .app-shell .nav-item{min-height:38px;padding-block:6px;margin-bottom:2px;font-size:13px}
+ .app-shell .workspace-label{padding-block:10px}
+}
+@media(max-width:760px){
+ .app-shell .sidebar nav{gap:3px}
+ .app-shell .nav-item{min-height:54px;padding-block:5px}
+ .app-shell .nav-item>svg{width:20px;height:20px}
+ .app-shell .nav-item>.nav-short-label{font-size:11px}
+ .app-shell .main-shell{padding-bottom:calc(148px + env(safe-area-inset-bottom))}
+}

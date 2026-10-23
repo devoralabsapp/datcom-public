@@ -87,6 +87,8 @@ Xem [hướng dẫn nhiều món, thanh toán gộp, hoàn tiền và chia sẻ]
 
 ## Số dư dùng lần sau và nhật ký hoạt động
 
-Người đặt chọn Hoàn lại hoặc Để hôm sau khi có tiền thừa. Số dư gắn theo tài khoản/phiên khách, tự trừ khi đặt hoặc thanh toán; thống kê hiện Số dư trừ riêng. Quản trị xem Nhật ký hoạt động trong menu. Xem [hướng dẫn số dư và nhật ký](docs/credit-and-activity.md) để biết cách đối soát, phạm vi log và những trường hợp không tự ghi nhận.
+Người đặt chọn Hoàn lại hoặc Để hôm sau khi có tiền thừa. Số dư gắn theo tài khoản/phiên khách, tự trừ khi đặt hoặc thanh toán; thống kê hiện Số dư trừ riêng. Quản trị xem toàn bộ Nhật ký hoạt động; người dùng thường mở Nhật ký của tôi để xem các hoạt động của chính tài khoản. Xem [hướng dẫn số dư và nhật ký](docs/credit-and-activity.md) để biết cách đối soát, phạm vi log và những trường hợp không tự ghi nhận.
 
 Chi tiết tổng theo bộ lọc, nút thanh toán gộp trong Đơn của tôi và quyền xem lịch sử đối soát: [hướng dẫn danh sách và thanh toán](docs/order-list-payments.md).
+
+Nhật ký cá nhân cần Publish Rules và tạo chỉ mục theo [hướng dẫn nhật ký](docs/activity-history.md).

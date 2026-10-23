@@ -1,7 +1,7 @@
 {
   "score": 4,
-  "summary": "Prototype Rules enforce shared meal reads, owner/admin edits, multi-dish name claims, incrementally verified payment groups, immutable bank receipts and settlement markers, preserved money on paid edits/cancellations, and paired immutable administrator reconciliation events. Restaurant links allow only active, unexpired capability gets; administrative roles and private profiles remain restricted. Carryover adds same-owner source/target money transfers with immutable ledgers and controlled credit pointers. Activity history is administrator-readable and append-only; client events are identity-bound, bank acceptance events are paired with receipts. Manual financial-event reads now require current parent ownership or an administrator; self-owned grouped payments can span different order names without granting access to another owner.",
-  "verification": "64 tests passed against Standard Auth/Firestore emulators. The suite includes filtered totals, partial payments and one-use credit estimates, same-UID alias grouping, foreign-owner group rejection, owner/admin ordered history queries, other-user and unauthenticated get/list denial, and all prior ordering, payment, role, share, credit and activity cases. Production build and type checking passed. Browser QA uses local fictitious orders only; no production financial transaction was performed.",
+  "summary": "Prototype Rules enforce shared meal reads, owner/admin edits, multi-dish name claims, incrementally verified payment groups, immutable bank receipts and settlement markers, preserved money on paid edits/cancellations, and paired immutable administrator reconciliation events. Restaurant links allow only active, unexpired capability gets; administrative roles and private profiles remain restricted. Carryover adds same-owner source/target money transfers with immutable ledgers and controlled credit pointers. Activity history is readable by its actor or an administrator and remains append-only; client events are identity-bound, bank acceptance events are paired with receipts. Manual financial-event reads now require current parent ownership or an administrator; self-owned grouped payments can span different order names without granting access to another owner.",
+  "verification": "65 tests passed against Standard Auth/Firestore emulators, including owner-scoped activity get/list, rejection of foreign actor reads, missing scope and spoofed administrator query flags, anonymous-owner access, unauthenticated denial, immutable events, actor/bank spoofing, profile privacy, and cursor pagination without duplicates across equal timestamps. All prior meal, payment, refund, credit, role and sharing cases pass. Production build and type checking pass. Browser QA verified full desktop navigation with no sidebar scrolling at 720px height, contained long activity details, 375px mobile cards, owner-only results despite foreign entries, and administrator pagination. Production index creation must be confirmed separately; emulators do not enforce it. No production financial transaction was performed.",
   "findings": [
     {
       "check": "Abuse controls",
@@ -150,7 +150,7 @@
       "result": "blocked; UID-bound balances and paired immutable transfers validated"
     },
     {
-      "check": "Non-admin activity reads, forged actor identities, client-written bank acceptance events and activity edits/deletes",
+      "check": "Foreign/unauthenticated activity reads, forged actor identities, client-written bank acceptance events and activity edits/deletes",
       "result": "blocked; app claims remain client-originated and are not a money authority"
     }
   ],
