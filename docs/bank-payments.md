@@ -4,9 +4,9 @@
 
 Quản trị mở **Thông tin chuyển khoản → Cài đặt tài khoản nhận tiền**, chọn ngân hàng, nhập số tài khoản và tên chủ tài khoản rồi lưu. Khách không có phần cài đặt này. Thông tin nhận tiền được lưu trong `settings/payment` và được dùng chung cho nhóm; chỉ quản trị được thay đổi.
 
-Người đặt mở **Thông tin chuyển khoản**, chọn đơn chưa trả của mình. Quản trị có thể tạo QR hộ các đơn khác. QR có số tiền chính xác và nội dung dạng `Ten nguoi 23/10 COM0123456789ABCDEF0123`. Tên/ngày giúp người dùng nhận biết; mã `COM` là mã riêng của đơn, phải giữ nguyên khi chuyển tiền. Mã được tìm ở toàn bộ nội dung thông báo, gồm trường `Transaction Details`, `Nội dung` hoặc phần văn bản bao quanh.
+Người đặt mở **Thông tin chuyển khoản**, chọn đơn chưa trả của mình. Quản trị có thể tạo QR hộ các đơn khác. QR có số tiền chính xác và nội dung dạng `COM0123456789ABCDEF0123` (23 ký tự), nằm trong giới hạn 25 ký tự của trường nội dung VietQR. Tên/ngày của đơn hiển thị riêng cạnh QR; mã `COM` là mã riêng của đơn, phải giữ nguyên khi chuyển tiền. Mã được tìm ở toàn bộ nội dung thông báo, gồm trường `Transaction Details`, `Nội dung` hoặc phần văn bản bao quanh.
 
-QR được dựng ngay trong trình duyệt bằng nội dung NAPAS/VietQR và thư viện QR, không gửi số tài khoản hoặc dữ liệu đơn đến dịch vụ ảnh QR. Danh sách BIN ngân hàng trong `data/banks.json` lấy từ [VietQR Banks API](https://www.vietqr.io/api-bank), ngày 23/10/2026. Tên cấu hình hiển thị để đối chiếu; người dùng cần kiểm tra người nhận mà ứng dụng ngân hàng trả về khi quét, vì website không có dịch vụ xác minh chủ tài khoản.
+QR được dựng ngay trong trình duyệt bằng nội dung NAPAS/VietQR và thư viện QR, không gửi số tài khoản hoặc dữ liệu đơn đến dịch vụ ảnh QR. Giới hạn nội dung đối chiếu theo [VietQR Generate](https://vietqr.io/en/danh-sach-api/link-tao-ma-nhanh/api-tao-ma-qr/) và tài liệu [NAPAS VietQRInfo.AddInfo](https://developer.napas.com.vn/files/assets/files/Techspec_NapasCore_v1.1.pdf). Danh sách BIN ngân hàng trong `data/banks.json` lấy từ [VietQR Banks API](https://www.vietqr.io/api-bank), ngày 23/10/2026. Tên cấu hình hiển thị để đối chiếu; người dùng cần kiểm tra người nhận mà ứng dụng ngân hàng trả về khi quét, vì website không có dịch vụ xác minh chủ tài khoản.
 
 Mỗi mã dùng cho một đơn chưa trả, có hiệu lực tối đa 23 giờ. Mở lại cùng đơn sẽ dùng lại mã còn phù hợp. Thay món/giá/số lượng, chuyển chủ đơn hoặc đổi tài khoản nhận sẽ khiến mã cũ không được tự xác nhận. Đơn đã hủy/đã trả không tạo QR mới. QR cũ dạng ảnh vẫn được hỗ trợ để chuyển khoản thủ công trong thời gian chuyển đổi.
 
@@ -40,7 +40,7 @@ Body JSON chỉ có một trường, chứa **nguyên văn** thông báo (không
 
 ```json
 {
-  "notification": "BIDV notice to customer\nTransaction Time: 12:20 23/10/2026\nAccount thanh toán: 000123456789\nTransaction Amount: +40,000 VND\nEnding Balance: 9,999,999 VND\nTransaction Details: Nguyen Van Mau 23/10 COM0123456789ABCDEF0123\nTransaction Code: FAKE-BIDV-001"
+  "notification": "BIDV notice to customer\nTransaction Time: 12:20 23/10/2026\nAccount thanh toán: 000123456789\nTransaction Amount: +40,000 VND\nEnding Balance: 9,999,999 VND\nTransaction Details: COM0123456789ABCDEF0123\nTransaction Code: FAKE-BIDV-001"
 }
 ```
 

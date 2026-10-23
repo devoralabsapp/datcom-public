@@ -16,13 +16,14 @@ Transaction Code: FAKE-TRANSACTION-001`;
 
 test('VietQR encodes the exact beneficiary, integer amount and unique order reference with CRC16',()=>{
  assert.equal(crc16('123456789'),'29B1');
- const description=paymentDescription('  Đặng Thị Người Mẫu rất dài  ','2026-10-23',reference);
- assert.ok(description.length<=50);assert.ok(description.includes('23/10 '+reference));assert.ok(!/[^\x20-\x7e]/.test(description));
+ const description=paymentDescription(reference);
+ assert.equal(description,reference);assert.ok(description.length<=25);assert.ok(!/[^\x20-\x7e]/.test(description));
  const payload=vietQrPayload(account,40000,description);
  const fields=new Map<string,string>();let cursor=0;while(cursor<payload.length){const id=payload.slice(cursor,cursor+2),length=Number(payload.slice(cursor+2,cursor+4));fields.set(id,payload.slice(cursor+4,cursor+4+length));cursor+=4+length;}
  assert.equal(cursor,payload.length);assert.equal(fields.get('54'),'40000');assert.equal(fields.get('53'),'704');assert.equal(fields.get('58'),'VN');assert.ok(fields.get('38')?.includes(account.accountNumber));assert.ok(fields.get('38')?.includes('970418'));assert.ok(fields.get('62')?.includes(reference));assert.equal(fields.get('63'),crc16(payload.slice(0,-4)));
  assert.notEqual(newPaymentReference(),newPaymentReference());assert.match(newPaymentReference(),/^COM[A-F0-9]{20}$/);
  for(const amount of [1,40000.5,-40000,Infinity,30000001])assert.throws(()=>vietQrPayload(account,amount,description));
+ assert.throws(()=>vietQrPayload(account,40000,'x'.repeat(26)));assert.throws(()=>paymentDescription('invalid'));
  assert.throws(()=>normalizeBankAccount({...account,accountNumber:'../account'}));assert.throws(()=>normalizeBankAccount({...account,bankBin:'BIDV'}));
 });
 

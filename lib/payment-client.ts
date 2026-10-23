@@ -17,7 +17,7 @@ export async function requestPayment(client:MealClient,dayId:string,orderId:stri
  if(!/^[A-Za-z0-9_-]{1,100}$/.test(dayId)||!/^[a-f0-9]{64}$/.test(orderId))throw new Error('Đơn thanh toán chưa hợp lệ.');
  const orderRef=doc(client.db,'days',dayId,'orders',orderId),settingsRef=doc(client.db,'settings','payment'),linkRef=doc(client.db,'paymentLinks',dayId,'orders',orderId);
  return runTransaction(client.db,async tx=>{
-  const [orderSnapshot,settings,link,day]=await Promise.all([tx.get(orderRef),tx.get(settingsRef),tx.get(linkRef),tx.get(doc(client.db,'days',dayId))]);
+  const [orderSnapshot,settings,link]=await Promise.all([tx.get(orderRef),tx.get(settingsRef),tx.get(linkRef)]);
   const order=orderSnapshot.data(),account=settings.data(),bankVersion=settings.data()?.updatedAt;
   if(!order||order.cancelled||order.paid)throw new Error('Đơn đã thanh toán, đã hủy hoặc không còn tồn tại.');
   if(order.ownerId!==user.uid&&!admin)throw new Error('Bạn chỉ được tạo QR cho đơn của mình.');
@@ -33,7 +33,7 @@ export async function requestPayment(client:MealClient,dayId:string,orderId:stri
     if((error as {code?:string}).code!=='permission-denied')throw error;
    }
   }
-  const reference=newPaymentReference(),description=paymentDescription(order.name,day.data()?.date||'',reference),expiresAt=Timestamp.fromMillis(Date.now()+23*3600000);
+  const reference=newPaymentReference(),description=paymentDescription(reference),expiresAt=Timestamp.fromMillis(Date.now()+23*3600000);
   const value={bankBin:account.bankBin,bankName:account.bankName,accountNumber:account.accountNumber,accountName:account.accountName,reference,dayId,orderId,ownerId:order.ownerId,requestedBy:user.uid,name:order.name,amount,dishId:order.dishId,price:order.price,quantity:order.quantity,description,orderCreatedAt:order.createdAt,bankConfigUpdatedAt:bankVersion,createdAt:serverTimestamp(),expiresAt};
   tx.set(doc(client.db,'paymentIntents',reference),value);tx.set(linkRef,{reference,updatedAt:serverTimestamp()});
   return {...value,expiresAt:expiresAt.toDate().toISOString()};
