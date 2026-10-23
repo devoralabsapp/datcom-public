@@ -89,7 +89,7 @@ service cloud.firestore {
      || (e.kind=='refund' && values[5]=='refund' && amount<0 && d.refundedAmount==values[1]-amount && d.receivedAmount==values[0] && d.voidedAmount==values[2]));
   }
   match /days/{dayId}/orders/{orderId}/financialEvents/{eventId}{
-   allow read: if signedIn();
+   allow read: if signedIn() && (admin() || get(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.ownerId==request.auth.uid);
    allow create: if admin() && eventId.matches('^[a-f0-9]{32}$') && request.resource.data.keys().hasAll(['kind','createdBy','createdAt','beforeReceived','beforeRefunded','beforeVoided','afterReceived','afterRefunded','afterVoided']) && request.resource.data.keys().hasOnly(['kind','createdBy','createdAt','beforeReceived','beforeRefunded','beforeVoided','afterReceived','afterRefunded','afterVoided']) && request.resource.data.createdAt==request.time && request.resource.data.createdBy==request.auth.uid && getAfter(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.paymentEventId==eventId && getAfter(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.updatedAt==request.time;
    allow update,delete: if false;
   }
@@ -324,7 +324,7 @@ service cloud.firestore {
    return i.keys().hasAll(['key','dayId','orderId','date','name','dish','ownerId','dishId','price','quantity','amount','orderCreatedAt']) && i.keys().hasOnly(['key','dayId','orderId','date','name','dish','ownerId','dishId','price','quantity','amount','orderCreatedAt'])
     && before.state=='building' && before.requestedBy==request.auth.uid && request.time<before.expiresAt && after.lastItemKey==key && after.count==before.count+1 && after.updatedAt==request.time
     && key==i.key && key==i.dayId+'~'+i.orderId && i.date==get(/databases/$(database)/documents/days/$(i.dayId)).data.date && o.cancelled==false && o.paid==false && (o.ownerId==request.auth.uid || admin())
-    && i.name==o.name && groupPerson(o.name)==before.personKey && i.dish==o.dish && i.ownerId==o.ownerId && i.dishId==o.dishId && i.price is int && i.quantity is int && i.amount is int && i.price==o.price && i.quantity==o.quantity && i.orderCreatedAt==o.createdAt && i.amount==due(o)
+    && i.name==o.name && (groupPerson(o.name)==before.personKey || o.ownerId==request.auth.uid) && i.dish==o.dish && i.ownerId==o.ownerId && i.dishId==o.dishId && i.price is int && i.quantity is int && i.amount is int && i.price==o.price && i.quantity==o.quantity && i.orderCreatedAt==o.createdAt && i.amount==due(o)
     && getAfter(/databases/$(database)/documents/paymentLinks/$(i.dayId)/orders/$(i.orderId)).data.reference==code && getAfter(/databases/$(database)/documents/paymentLinks/$(i.dayId)/orders/$(i.orderId)).data.kind=='group';
   }
   function validGroupLink(d,dayId,orderId){

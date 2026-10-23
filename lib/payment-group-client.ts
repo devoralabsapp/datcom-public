@@ -60,7 +60,7 @@ export async function requestPaymentGroup(client:MealClient,orders:PaymentOrderR
    const item=await runTransaction(client.db,async tx=>{
     const key=paymentItemKey(ref),itemRef=doc(client.db,'paymentGroups',reference,'items',key),orderRef=doc(client.db,'days',ref.dayId,'orders',ref.orderId);
     const [group,order,prior,day]=await Promise.all([tx.get(groupRef),tx.get(orderRef),tx.get(itemRef),tx.get(doc(client.db,'days',ref.dayId))]),g=group.data()!,o=order.data();
-    if(!o||o.paid||o.cancelled||(!admin&&o.ownerId!==user.uid)||personKey(o.name)!==g.personKey||g.state!=='building'||prior.exists())throw new Error('Danh sách thanh toán vừa thay đổi. Vui lòng cập nhật rồi thử lại.');
+    if(!o||o.paid||o.cancelled||(!admin&&o.ownerId!==user.uid)||(personKey(o.name)!==g.personKey&&o.ownerId!==user.uid)||g.state!=='building'||prior.exists())throw new Error('Danh sách thanh toán vừa thay đổi. Vui lòng cập nhật rồi thử lại.');
     const apply=await invalidateLinkedGroup(client,tx,ref.dayId,ref.orderId),amount=orderFinance(o as never).due;
     if(g.amount+amount>30000000)throw new Error('Tổng mỗi lần thanh toán tối đa 30.000.000đ. Hãy chọn ít đơn hơn.');
     const value={...ref,key,date:String(day.data()?.date||''),name:o.name,dish:o.dish,ownerId:o.ownerId,dishId:o.dishId,price:o.price,quantity:o.quantity,amount,orderCreatedAt:o.createdAt};

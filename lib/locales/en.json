@@ -744,5 +744,12 @@
   "Tự động": "Automatic",
   "Chưa khớp": "Unmatched",
   "Đã xử lý": "Already processed",
-  "Lỗi": "Error"
+  "Lỗi": "Error",
+  "Tổng đơn của tôi:": "My orders total:",
+  "Đã thanh toán:": "Paid:",
+  "Số dư dự kiến trừ:": "Estimated credit offset:",
+  "Cần thanh toán:": "Amount to pay:",
+  "Thanh toán các đơn của bạn đang hiển thị trong ngày đã chọn.": "Pay your orders currently shown for the selected day.",
+  "Xem {0} đơn chưa thanh toán": "View {0} unpaid orders",
+  "Bạn có {0} đơn cần thanh toán": "You have {0} orders to pay"
 }
