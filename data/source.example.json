@@ -1,0 +1,12 @@
+{
+ "importedAt":"2026-10-22",
+ "spreadsheetUrl":"",
+ "demo":true,
+ "days":[{
+  "id":"demo-day",
+  "date":"2026-10-22",
+  "label":"Ngày mẫu",
+  "menu":[{"name":"Cơm gà quay tiêu","price":40000},{"name":"Cơm đậu nhồi thịt","price":40000},{"name":"Salad gà nướng","price":50000}],
+  "orders":[],"members":[],"source":false,"status":"auto"
+ }]
+}

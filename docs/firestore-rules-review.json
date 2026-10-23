@@ -1,0 +1,101 @@
+{
+  "score": 4,
+  "summary": "Prototype Security Rules retain shared meal views and owner/admin writes, add private owner/admin user profiles, administrator-only ordering blocks, and primary-administrator-only role management. Roles are separate from self-written profiles; self/primary lockout and granting roles to anonymous or blocked identities are rejected.",
+  "verification": "29 tests passed against the Standard Auth/Firestore emulators, including direct SDK attacks, atomic role-plus-block bypass, private profiles, admin-edit preferred-name regression, committed-order refresh failure, existing account-link and pickup flows. Browser checks covered anonymous order/reload autofill, absent guest admin menu, primary admin grant/block operations and logout cleanup, desktop and 390px layouts. Production Rules have not been published by these tests.",
+  "findings": [
+    {
+      "check": "Abuse controls",
+      "severity": "minor",
+      "issue": "Anonymous identity and per-document validation do not impose a trusted global request-rate limit or prevent repeated anonymous account creation.",
+      "recommendation": "Monitor usage and assess Firebase App Check or a dedicated rate limit if the app is shared with a broad audience."
+    }
+  ],
+  "attacks": [
+    {
+      "check": "Create/update schema bypass, extra fields, missing required fields, numeric ranges and long notes",
+      "result": "blocked"
+    },
+    {
+      "check": "Forged ownerId, changed ownerId/createdAt, paid status and unit price",
+      "result": "blocked"
+    },
+    {
+      "check": "Anonymous and Google visitors reading other users' orders and unfiltered order collections",
+      "result": "allowed as requested; canEdit false for other owners"
+    },
+    {
+      "check": "Non-owner updates, cancellation, payment changes and deletion via direct SDK or app client",
+      "result": "blocked"
+    },
+    {
+      "check": "Non-admin listing admin memberships/private profiles/access states or reading another user profile/transfer ticket",
+      "result": "blocked; current administrators can read memberships/profiles for management as requested"
+    },
+    {
+      "check": "Self-assigning or editing admin membership, unverified/non-Google admin identities",
+      "result": "blocked"
+    },
+    {
+      "check": "Changing menu or cutoff as a guest, owner writes after cutoff and invalid day timestamps",
+      "result": "blocked"
+    },
+    {
+      "check": "Concurrent duplicate names",
+      "result": "one succeeds; other rejected"
+    },
+    {
+      "check": "Unauthorised/expired ownership transfers, anonymous recipients and transfer combined with payment changes",
+      "result": "blocked"
+    },
+    {
+      "check": "Orphaned orders/dishes and legacy server collections",
+      "result": "blocked"
+    },
+    {
+      "check": "Guest ordering/edit/cancel, manager payment, Google account linking and expiring ticket merge",
+      "result": "allowed as intended"
+    },
+    {
+      "check": "Pickup results created by guests, forged actor/timestamp/week, future date, open/missing day, duplicate keys, extra fields, invalid types and oversize selected names including the last slot",
+      "result": "blocked"
+    },
+    {
+      "check": "Pickup result overwrite/deletion and replay with a different count",
+      "result": "writes blocked; app returns the original result"
+    },
+    {
+      "check": "Concurrent pickup spins and balance for a stable daily group",
+      "result": "one official result per date; stable attendance stays within one weekly turn"
+    },
+    {
+      "check": "Profile schema pollution, forged owner/email/provider, oversize name, invalid type, missing required fields, modified createdAt/server timestamps and profile deletion",
+      "result": "blocked"
+    },
+    {
+      "check": "Regular admin/non-admin role grants, self/primary demotion or lockout, anonymous/unknown/blocked promotion and role/access deletion",
+      "result": "blocked"
+    },
+    {
+      "check": "Atomic grant-admin plus block in the same batch, blocking an enabled administrator and blocked-user direct order create/update",
+      "result": "blocked"
+    },
+    {
+      "check": "Primary admin granting/revoking Google roles; administrators block/unblock regular users; blocked owner cancellation before cutoff",
+      "result": "allowed as intended"
+    },
+    {
+      "check": "Guest preferred name after committed own order, failed refresh and browser storage denial; admin editing someone else",
+      "result": "own name retained; storage failure does not prevent ordering; another owner edit does not overwrite admin preference"
+    }
+  ],
+  "assumptions": [
+    "The existing primary admin UID PRIMARY_ADMIN_UID_HERE is bootstrapped in Console; only that enabled verified Google identity may change other administrator memberships in the web app. No self/primary role changes or blocks.",
+    "The client normalizes names to NFC and hashes lowercase text; Rules explicitly normalize Vietnamese uppercase Đ for matching browser-generated IDs.",
+    "The user explicitly requested shared visibility of all meal information. Rules apply to complete order documents, including notes, owner IDs and payment state; all Firebase visitors, including anonymous customers, can read these. Role documents and ownership-transfer tickets keep their existing private access checks.",
+    "Existing mealDays/mealOrders and old signed-cookie guest identities require a separate reviewed migration; this change does not import or expose them.",
+    "Pickup results are administrator-created assignments. Rules validate authority, date, roster closure, bounded values and immutability; the trusted admin application computes weekly priority and random tie breaks. History counts selections from feature activation, matched by normalized order name.",
+    "User-profile emails/provider are attested by Firebase identity token, readable by owner/admin only. The human explicitly requested a user-management directory for administrators; meal shared-read permissions do not expose these new private profile collections.",
+    "Ordering blocks apply to a UID, not Firebase Authentication deletion/disable. Anonymous identities can change after clearing browser data. Historical order owners appear without invented emails; live profiles are registered on later visits.",
+    "The deployment tolerates old Rules for optional self-profile sync/own-access reads until manual publication. Required directory and role/block operations still fail closed with a publication message. Browser name storage remains independent of Firebase profile readiness."
+  ]
+}

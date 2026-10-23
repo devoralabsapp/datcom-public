@@ -1,0 +1,64 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "next-env.d.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "hooks/**/*.ts",
+    "lib/types.ts",
+    "lib/utils.ts",
+    "types/**/*.d.ts",
+    "tests/**/*.ts",
+    "next.config.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "lib/source.ts",
+    "lib/firebase-client.ts",
+    "lib/meal-client.ts",
+    "lib/meal-client-model.ts",
+    "lib/client-auth.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "examples",
+    "dist",
+    ".vinext",
+    ".wrangler",
+    ".sites-runtime",
+    "outputs",
+    "work"
+  ]
+}
