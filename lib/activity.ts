@@ -1,0 +1,13 @@
+import {collection,doc,setDoc,serverTimestamp,type Firestore,type Transaction,type WriteBatch} from 'firebase/firestore';
+import type {MealClient} from './meal-client';
+import {ensureUser} from './firebase-client';
+export const activityKinds=['app.visit','page.view','auth.signin','auth.signout','order.create','order.update','order.cancel','order.transfer','menu.save','payment.receive','payment.void','payment.refund','payment.qr','bank.received','bank.notice','app.error','payment.settings','credit.choice','credit.apply','user.block','user.role','pickup.draw','share.create','share.revoke','export.pdf','export.jpg','export.csv'] as const;
+export type ActivityKind=typeof activityKinds[number];
+export type ActivityInput={kind:ActivityKind;summary:string;dayId?:string;orderId?:string;reference?:string;details?:unknown};
+function safeDetails(value:unknown){const text=JSON.stringify(value??{});if(text.length>24000)throw new Error('Chi tiết nhật ký quá dài.');return text;}
+export function activityValue(actorId:string,input:ActivityInput){return {kind:input.kind,actorId,source:'app',summary:input.summary.slice(0,500),dayId:input.dayId||'',orderId:input.orderId||'',reference:input.reference||'',details:safeDetails(input.details),createdAt:serverTimestamp()};}
+export function appendActivity(writer:Transaction|WriteBatch,db:Firestore,actorId:string,input:ActivityInput){const ref=doc(collection(db,'activityLogs'));(writer as Transaction).set(ref,activityValue(actorId,input));}
+export async function recordActivity(client:MealClient,input:ActivityInput){const user=await ensureUser(client.auth);await setDoc(doc(collection(client.db,'activityLogs')),activityValue(user.uid,input));}
+export function orderAudit(order:Record<string,unknown>|undefined){if(!order)return null;const fields=['name','ownerId','dish','price','quantity','note','paid','cancelled','receivedAmount','refundedAmount','voidedAmount','creditInAmount','creditOutAmount','surplusChoice'];return Object.fromEntries(fields.filter(k=>order[k]!==undefined).map(k=>[k,order[k]]));}
+const visits=new Map<string,Promise<void>>();
+export async function logVisit(client:MealClient){const user=await ensureUser(client.auth),uid=user.uid;if(visits.has(uid))return visits.get(uid);const task=(async()=>{const key='com-nha:visit:'+uid,now=Date.now();try{if(now-Number(sessionStorage.getItem(key)||0)<30*60000)return;}catch{}await recordActivity(client,{kind:'app.visit',summary:'Truy cập ứng dụng',details:{signedIn:!user.isAnonymous}});try{sessionStorage.setItem(key,String(now));}catch{}})();visits.set(uid,task);try{await task;}finally{visits.delete(uid);}}

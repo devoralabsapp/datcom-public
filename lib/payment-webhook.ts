@@ -50,6 +50,7 @@ class Store{
  async list(path:string):Promise<Document[]>{const all:Document[]=[];let page='';do{const result=await this.call('/'+path+'?pageSize=1000'+(page?'&pageToken='+encodeURIComponent(page):''),'GET');all.push(...(result.documents||[]));page=result.nextPageToken||'';if(all.length>1000)throw new Error('Invalid group size.');}while(page);return all;}
  create(path:string,fields:Record<string,Value>){return {update:{name:this.root+'/'+path,fields},currentDocument:{exists:false},updateTransforms:[{fieldPath:'createdAt',setToServerValue:'REQUEST_TIME'}]};}
 }
+function bankActivity(store:Store,uid:string,reference:string,details:unknown,dayId='',orderId=''){return store.create('activityLogs/'+randomUUID().replace(/-/g,''),{kind:stringValue('bank.received'),actorId:stringValue(uid),source:stringValue('bank'),summary:stringValue('Ngân hàng xác nhận thanh toán'),dayId:stringValue(dayId),orderId:stringValue(orderId),reference:stringValue(reference),details:stringValue(JSON.stringify(details))});}
 function matches(n:BankNotification,intent:Data,order:Data,bank:Data,link:Data,now:number){
  if(n.amount!==intent.amount)return 'amount_mismatch';
  if(n.bankBin!==intent.bankBin||n.accountNumber!==intent.accountNumber)return 'account_mismatch';
@@ -80,7 +81,7 @@ async function settle(config:Config,notification:BankNotification,raw:string){
    const mismatch=matches(n,intent,decode(orderDoc),decode(bankDoc),decode(linkDoc),Date.now());
    if(mismatch)return {status:'unmatched',reason:mismatch};
    const receiptFields={reference:stringValue(n.reference),transactionKey:stringValue(transactionKey),transactionId:stringValue(n.transactionId),amount:{integerValue:String(n.amount)},bankBin:stringValue(n.bankBin),accountNumber:stringValue(n.accountNumber),occurredAt:timestampValue(n.occurredAt),notificationHash:stringValue(sha(raw)),createdBy:stringValue(auth.uid)};
-   const writes=[store.create('paymentReceipts/'+n.reference,receiptFields),store.create('paymentTransactions/'+transactionKey,{reference:stringValue(n.reference)}),receivedWrite(orderDoc,n.amount)];
+   const writes=[store.create('paymentReceipts/'+n.reference,receiptFields),store.create('paymentTransactions/'+transactionKey,{reference:stringValue(n.reference)}),receivedWrite(orderDoc,n.amount),bankActivity(store,auth.uid,n.reference,{amount:n.amount,name:intent.name,dish:decode(orderDoc).dish,quantity:intent.quantity},dayId,orderId)];
    // Commit is atomic. The order updateTime and receipt/transaction nonexistence
    // are preconditions; Rules recheck the current intent/link/payee at commit.
    committing=true;await store.call(':commit','POST',{writes});
@@ -111,7 +112,7 @@ async function settleGroup(store:Store,uid:string,n:BankNotification,raw:string,
   if(when<Date.parse(String(g.createdAt))-120000||when>Date.now()+300000||when>Date.parse(String(g.expiresAt)))return {status:'unmatched',reason:'transaction_time_mismatch'};
   const receiptFields={reference:stringValue(n.reference),transactionKey:stringValue(transactionKey),transactionId:stringValue(n.transactionId),amount:{integerValue:String(n.amount)},bankBin:stringValue(n.bankBin),accountNumber:stringValue(n.accountNumber),occurredAt:timestampValue(n.occurredAt),notificationHash:stringValue(sha(raw)),createdBy:stringValue(uid)};
   try{
-   await store.call(':commit','POST',{writes:[store.create('paymentReceipts/'+n.reference,receiptFields),store.create('paymentTransactions/'+transactionKey,{reference:stringValue(n.reference)}),{update:{name:groupDoc.name,fields:{state:stringValue('paid')}},updateMask:{fieldPaths:['state']},updateTransforms:[{fieldPath:'updatedAt',setToServerValue:'REQUEST_TIME'}],currentDocument:{updateTime:groupDoc.updateTime}}]});break;
+   await store.call(':commit','POST',{writes:[store.create('paymentReceipts/'+n.reference,receiptFields),store.create('paymentTransactions/'+transactionKey,{reference:stringValue(n.reference)}),{update:{name:groupDoc.name,fields:{state:stringValue('paid')}},updateMask:{fieldPaths:['state']},updateTransforms:[{fieldPath:'updatedAt',setToServerValue:'REQUEST_TIME'}],currentDocument:{updateTime:groupDoc.updateTime}},bankActivity(store,uid,n.reference,{amount:n.amount,name:g.name,count:g.count})]});break;
   }catch(error){if(error instanceof RestError&&[403,409].includes(error.status)&&attempt<3)continue;throw error;}
  }
  const remaining=await finishGroup(store,uid,n.reference);
@@ -150,7 +151,9 @@ export async function bankWebhook(request:Request,env:Env=process.env,onLog?:(ev
  const supplied=request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/)?.[1]||'';
  if(supplied.length!==secret.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(secret)))return json({error:'Không được phép.'},401);
  const requestId=randomUUID(),receivedAt=new Date().toISOString();let parsed:BankNotification|undefined;
- function respond(value:PaymentLogEvent['result'],status=200,notification?:string){
+ async function respond(value:PaymentLogEvent['result'],status=200,notification?:string){
+  if(notification&&((value as {status?:string}).status!=='paid')){try{const config=configuration(env),bot=await identity(config),store=new Store(config,bot.token);await store.call(':commit','POST',{writes:[store.create('activityLogs/'+randomUUID().replace(/-/g,''),{kind:stringValue('bank.notice'),actorId:stringValue(bot.uid),source:stringValue('bank'),summary:stringValue('Kết quả xử lý thông báo ngân hàng'),dayId:stringValue(''),orderId:stringValue(''),reference:stringValue(parsed?.reference||''),details:stringValue(JSON.stringify({status:(value as {status?:string}).status||'error',reason:(value as {reason?:string}).reason||'',httpStatus:status,amount:parsed?.amount||0}))})]});}catch{console.warn('[payment-activity] write_failed');}}
+
   try{onLog?.({requestId,receivedAt,httpStatus:status,result:value,notification,parsed});}catch{console.warn('[payment-telegram] scheduling_failed');}
   return json(value,status);
  }

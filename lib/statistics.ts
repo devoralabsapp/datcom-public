@@ -2,7 +2,7 @@ import {localNow} from './meal-client-model';
 
 export type StatisticsPeriod='today'|'week'|'month'|'all';
 export type StatisticsSource='all'|'sheets'|'web';
-export type StatisticsOrder={id:string;orderId?:string;ownerId?:string;dayId:string;date:string;session:string;name:string;dish:string;amount:number;quantity:number;paid:boolean;receivedAmount?:number;refundedAmount?:number;voidedAmount?:number;refundDue?:number;appliedAmount?:number;cancelled?:boolean;source:'sheets'|'web'};
+export type StatisticsOrder={id:string;orderId?:string;ownerId?:string;dayId:string;date:string;session:string;name:string;dish:string;amount:number;quantity:number;paid:boolean;receivedAmount?:number;refundedAmount?:number;voidedAmount?:number;refundDue?:number;creditAvailable?:number;creditOffset?:number;creditInAmount?:number;creditOutAmount?:number;surplusChoice?:'refund'|'carry';appliedAmount?:number;cancelled?:boolean;source:'sheets'|'web'};
 export type StatisticsWarning={date:string;sheet:string;row?:number;message:string};
 export type SheetsStatistics={orders:StatisticsOrder[];warnings:StatisticsWarning[];sheetCount:number;fetchedAt:string;sourceUrl?:string};
 export const statisticsPeriods:{id:StatisticsPeriod;label:string}[]=[{id:'today',label:'Hôm nay'},{id:'week',label:'Tuần này'},{id:'month',label:'Tháng này'},{id:'all',label:'Tất cả'}];
@@ -27,16 +27,18 @@ export function combineStatistics(sheets:StatisticsOrder[],web:StatisticsOrder[]
 }
 export function summarizeStatistics(orders:StatisticsOrder[],period:StatisticsPeriod,now=new Date()){
  const range=periodRange(period,now);
- const selected=orders.filter(o=>(!range.start||o.date>=range.start)&&(!range.end||o.date<range.end));
- const applied=(o:StatisticsOrder)=>o.appliedAmount??(o.paid?o.amount:0),total=selected.reduce((s,o)=>s+o.amount,0),paid=selected.reduce((s,o)=>s+applied(o),0),refundDue=selected.reduce((s,o)=>s+(o.refundDue||0),0);
+ const available=new Map<string,number>();for(const o of orders)if(o.source==='web'&&o.ownerId)available.set(o.ownerId,(available.get(o.ownerId)||0)+(o.creditAvailable||0));
+ const selected=orders.filter(o=>(!range.start||o.date>=range.start)&&(!range.end||o.date<range.end)).map(o=>({...o,creditOffset:0})).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+ for(const o of selected){if(o.source!=='web'||!o.ownerId||o.cancelled)continue;const balance=available.get(o.ownerId)||0,offset=Math.min(balance,Math.max(0,o.amount-(o.appliedAmount??(o.paid?o.amount:0))));o.creditOffset=offset;available.set(o.ownerId,balance-offset);}
+ const applied=(o:StatisticsOrder)=>o.appliedAmount??(o.paid?o.amount:0),total=selected.reduce((s,o)=>s+o.amount,0),paid=selected.reduce((s,o)=>s+applied(o),0),refundDue=selected.reduce((s,o)=>s+(o.refundDue||0),0),creditOffset=selected.reduce((s,o)=>s+o.creditOffset,0);
  const byMonth=period==='all'&&new Set(selected.map(o=>o.date)).size>40;
- const trend=new Map<string,{key:string;total:number;paid:number;unpaid:number}>();
- if(period!=='all')for(let d=range.start;d<range.end;d=plusDays(d,1))trend.set(d,{key:d,total:0,paid:0,unpaid:0});
- const people=new Map<string,{key:string;name:string;total:number;paid:number;unpaid:number;refundDue:number;orders:number}>();
+ const trend=new Map<string,{key:string;total:number;paid:number;creditOffset:number;unpaid:number}>();
+ if(period!=='all')for(let d=range.start;d<range.end;d=plusDays(d,1))trend.set(d,{key:d,total:0,paid:0,creditOffset:0,unpaid:0});
+ const people=new Map<string,{key:string;name:string;total:number;paid:number;creditOffset:number;unpaid:number;refundDue:number;orders:number}>();
  for(const o of selected){
   const key=byMonth?o.date.slice(0,7):o.date;
-  const point=trend.get(key)||{key,total:0,paid:0,unpaid:0};point.total+=o.amount;point.paid+=applied(o);point.unpaid+=o.amount-applied(o);trend.set(key,point);
-  const pk=personKey(o.name),p=people.get(pk)||{key:pk,name:o.name,total:0,paid:0,unpaid:0,refundDue:0,orders:0};p.total+=o.amount;p.paid+=applied(o);p.unpaid+=o.amount-applied(o);p.refundDue+=o.refundDue||0;if(!o.cancelled)p.orders++;people.set(pk,p);
+  const point=trend.get(key)||{key,total:0,paid:0,creditOffset:0,unpaid:0};point.total+=o.amount;point.paid+=applied(o);point.creditOffset+=o.creditOffset;point.unpaid+=o.amount-applied(o)-o.creditOffset;trend.set(key,point);
+  const pk=personKey(o.name),p=people.get(pk)||{key:pk,name:o.name,total:0,paid:0,creditOffset:0,unpaid:0,refundDue:0,orders:0};p.total+=o.amount;p.paid+=applied(o);p.creditOffset+=o.creditOffset;p.unpaid+=o.amount-applied(o)-o.creditOffset;p.refundDue+=o.refundDue||0;if(!o.cancelled)p.orders++;people.set(pk,p);
  }
- return {range,total,paid,unpaid:total-paid,refundDue,orderCount:selected.filter(o=>!o.cancelled).length,peopleCount:people.size,selected,byMonth,trend:[...trend.values()].sort((a,b)=>a.key.localeCompare(b.key)).map(p=>({...p,label:byMonth?p.key.slice(5)+'/'+p.key.slice(0,4):p.key.slice(8)+'/'+p.key.slice(5,7)})),people:[...people.values()].sort((a,b)=>b.unpaid-a.unpaid||b.total-a.total||a.name.localeCompare(b.name,'vi'))};
+ return {range,total,paid,unpaid:total-paid-creditOffset,creditOffset,refundDue,orderCount:selected.filter(o=>!o.cancelled).length,peopleCount:people.size,selected,byMonth,trend:[...trend.values()].sort((a,b)=>a.key.localeCompare(b.key)).map(p=>({...p,label:byMonth?p.key.slice(5)+'/'+p.key.slice(0,4):p.key.slice(8)+'/'+p.key.slice(5,7)})),people:[...people.values()].sort((a,b)=>b.unpaid-a.unpaid||b.total-a.total||a.name.localeCompare(b.name,'vi'))};
 }

@@ -1,3 +1,4 @@
+import {appendActivity} from './activity';
 import {collection,doc,getDoc,getDocs,runTransaction,serverTimestamp,type DocumentData} from 'firebase/firestore';
 import type {MealClient} from './meal-client';
 import {ensureUser} from './firebase-client';
@@ -45,7 +46,7 @@ export async function setUserBlocked(client:MealClient,uid:string,blocked:boolea
  if(uid===user.uid||uid===PRIMARY_ADMIN_UID)throw new Error('Không thể khóa tài khoản quản trị đang sử dụng hoặc quản trị chính.');
  await runTransaction(client.db,async tx=>{
   const role=await tx.get(doc(client.db,'admins',uid));if(role.data()?.enabled===true)throw new Error('Cần thu hồi quyền quản trị trước khi khóa đặt cơm.');
-  tx.set(doc(client.db,'userAccess',uid),{blocked,updatedBy:user.uid,updatedAt:serverTimestamp()});
+  tx.set(doc(client.db,'userAccess',uid),{blocked,updatedBy:user.uid,updatedAt:serverTimestamp()});appendActivity(tx,client.db,user.uid,{kind:'user.block',summary:blocked?'Khóa đặt cơm':'Mở khóa đặt cơm',details:{targetUid:uid,blocked}});
  });
 }
 export async function setUserAdmin(client:MealClient,uid:string,enabled:boolean){
@@ -56,6 +57,6 @@ export async function setUserAdmin(client:MealClient,uid:string,enabled:boolean)
   const [profile,state]=await Promise.all([tx.get(doc(client.db,'userProfiles',uid)),tx.get(doc(client.db,'userAccess',uid))]);
   if(enabled&&(profile.data()?.provider!=='google.com'||!profile.data()?.email))throw new Error('Người này cần đăng nhập Google một lần trước khi được cấp quyền.');
   if(enabled&&state.data()?.blocked===true)throw new Error('Cần mở lại quyền đặt cơm trước khi cấp quyền quản trị.');
-  tx.set(doc(client.db,'admins',uid),{enabled,updatedBy:user.uid,updatedAt:serverTimestamp()});
+  tx.set(doc(client.db,'admins',uid),{enabled,updatedBy:user.uid,updatedAt:serverTimestamp()});appendActivity(tx,client.db,user.uid,{kind:'user.role',summary:enabled?'Cấp quyền quản trị':'Thu hồi quyền quản trị',details:{targetUid:uid,enabled}});
  });
 }

@@ -1,3 +1,4 @@
+import {appendActivity} from './activity';
 import {collection,doc,getDocFromServer,getDocsFromServer,query,where,runTransaction,serverTimestamp,type DocumentSnapshot,type DocumentData} from 'firebase/firestore';
 import type {MealClient} from './meal-client';
 import {ensureUser} from './firebase-client';
@@ -43,7 +44,7 @@ export async function drawPickup(client:MealClient,dayId:string,count:number){
   const orders=await Promise.all(locked.orders.docs.map(o=>tx.get(o.ref)));
   const candidates=pickupCandidates(orders.filter(o=>o.exists()).map(o=>({name:o.data()!.name,cancelled:o.data()!.cancelled})),history.filter(d=>d.date<initial.date));
   const selected=choosePickup(candidates,count),data={date:initial.date,weekStart:week.start,dayId,count,candidateCount:candidates.length,selectedNames:selected.map(p=>p.name),previousCounts:selected.map(p=>p.previousCount),selectedKeys:selected.map(p=>p.key),createdBy:user.uid,createdAt:serverTimestamp(),version:1};
-  tx.set(drawRef,data);return {candidates,created:true};
+  tx.set(drawRef,data);appendActivity(tx,client.db,user.uid,{kind:'pickup.draw',summary:'Lưu kết quả vòng quay',dayId,details:{date:initial.date,count,selectedNames:data.selectedNames}});return {candidates,created:true};
  });
  const draw=result.created?readDraw(await getDocFromServer(drawRef)):result.draw;if(!draw)throw new Error('Chưa xác nhận được kết quả. Vui lòng cập nhật, không quay lại.');
  return {...result,draw};

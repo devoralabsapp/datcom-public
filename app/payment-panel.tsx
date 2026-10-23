@@ -1,4 +1,5 @@
 'use client';
+import {CreditCoveredError} from '../lib/credit-client';
 import {useI18n} from '../components/i18n-provider';
 import {useEffect,useRef,useState} from 'react';
 import {doc,onSnapshot} from 'firebase/firestore';
@@ -32,7 +33,7 @@ function SinglePaymentPanel({workspace:w,client,onChanged}:{workspace:Workspace;
   let active=true;setIntent(undefined);setQr('');setError('');setPaid(false);setLoading(false);
   if(!orderId||!hasBank)return;
   setLoading(true);
-  void requestPayment(client,w.day.id,orderId).then(async value=>{const renderer=await import('qrcode');const image=await renderer.toDataURL(vietQrPayload(value,value.amount,value.description),{width:360,margin:4,errorCorrectionLevel:'M'});if(active){setIntent(value);setQr(image);}}).catch(e=>{if(active)setError(friendlyFirebaseError(e));}).finally(()=>{if(active)setLoading(false);});
+  void requestPayment(client,w.day.id,orderId).then(async value=>{const renderer=await import('qrcode');const image=await renderer.toDataURL(vietQrPayload(value,value.amount,value.description),{width:360,margin:4,errorCorrectionLevel:'M'});if(active){setIntent(value);setQr(image);}}).catch(e=>{if(active){if(e instanceof CreditCoveredError){setPaid(true);setMessage(e.message);changed.current();}else setError(friendlyFirebaseError(e));}}).finally(()=>{if(active)setLoading(false);});
   return()=>{active=false;};
  // Settings version changes invalidate a QR even if its displayed fields match.
  },[client,w.day.id,orderId,version,hasBank]);

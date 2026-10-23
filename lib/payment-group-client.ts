@@ -1,3 +1,5 @@
+import {applyCredit,CreditCoveredError} from './credit-client';
+import {appendActivity} from './activity';
 import {orderFinance} from './order-finance';
 import {collection,doc,getDoc,getDocs,runTransaction,serverTimestamp,Timestamp,type Transaction} from 'firebase/firestore';
 import type {MealClient} from './meal-client';
@@ -33,7 +35,7 @@ export async function clearOrderPaymentLink(client:MealClient,dayId:string,order
 }
 
 export async function requestPaymentGroup(client:MealClient,orders:PaymentOrderRef[],onProgress?:(done:number,total:number)=>void,signal?:AbortSignal):Promise<PaymentGroup>{
- const refs=paymentSelection(orders),user=await ensureUser(client.auth),admin=await client.isAdmin(),first=refs[0];
+ let refs=paymentSelection(orders);await applyCredit(client,refs);const states=await Promise.all(refs.map(ref=>getDoc(doc(client.db,'days',ref.dayId,'orders',ref.orderId))));refs=refs.filter((_,i)=>states[i].exists()&&!states[i].data()?.paid&&!states[i].data()?.cancelled);if(!refs.length)throw new CreditCoveredError();const user=await ensureUser(client.auth),admin=await client.isAdmin(),first=refs[0];
  const firstDoc=await getDoc(doc(client.db,'days',first.dayId,'orders',first.orderId)),firstOrder=firstDoc.data();
  if(!firstOrder||firstOrder.paid||firstOrder.cancelled||(!admin&&firstOrder.ownerId!==user.uid))throw new Error('Bạn chỉ được thanh toán đơn chưa trả của mình; quản trị có thể làm hộ.');
  const hash=await nameId(refs.map(paymentItemKey).join('|')),settings=await getDoc(doc(client.db,'settings','payment')),account=settings.data();
@@ -67,7 +69,7 @@ export async function requestPaymentGroup(client:MealClient,orders:PaymentOrderR
    items.push(item);onProgress?.(index+1,refs.length);
   }
   if(signal?.aborted)throw new Error('Đã dừng tạo QR thanh toán.');
-  await runTransaction(client.db,async tx=>{const value=(await tx.get(groupRef)).data();if(value?.state!=='building'||value.count!==refs.length)throw new Error('Danh sách thanh toán vừa thay đổi. Vui lòng cập nhật rồi thử lại.');tx.update(groupRef,{state:'ready',updatedAt:serverTimestamp()});});
+  await runTransaction(client.db,async tx=>{const value=(await tx.get(groupRef)).data();if(value?.state!=='building'||value.count!==refs.length)throw new Error('Danh sách thanh toán vừa thay đổi. Vui lòng cập nhật rồi thử lại.');tx.update(groupRef,{state:'ready',updatedAt:serverTimestamp()});appendActivity(tx,client.db,user.uid,{kind:'payment.qr',summary:'Tạo QR thanh toán gộp',reference,details:{name:firstOrder.name,amount:value.amount,count:refs.length,orders:refs.slice(0,100)}});});
   const g=(await getDoc(groupRef)).data()!;return {...g,expiresAt:g.expiresAt.toDate().toISOString(),items} as PaymentGroup;
  }catch(error){await cancelPaymentGroup(client,reference).catch(()=>{});throw error;}
 }

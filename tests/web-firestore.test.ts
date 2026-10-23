@@ -1,3 +1,6 @@
+import {applyCredit,chooseSurplus,creditBalances,CreditCoveredError} from '../lib/credit-client';
+import {activityValue,recordActivity} from '../lib/activity';
+import {summarizeStatistics} from '../lib/statistics';
 import {orderFinance} from '../lib/order-finance';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -436,6 +439,66 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    await payer.write({action:'order',dayId,id,name,dish:menu[0].name,quantity:2});let old=(await getDoc(doc(payer.db,'days',dayId,'orders',id))).data()!;assert.equal(old.receivedAmount,50000);assert.equal(orderFinance(old as never).due,30000);
    await payer.write({action:'cancel',dayId,id});assert.equal(orderFinance((await getDoc(doc(payer.db,'days',dayId,'orders',id))).data() as never).refundDue,50000);
    const placed=await payer.write({action:'order',dayId,name,items:[{dish:menu[0].name,quantity:1}]});assert.notEqual(placed.orders[0].id,id);assert.equal(placed.cancelledOrders?.find(o=>o.id===id)?.receivedAmount,50000);
+  });
+
+
+  await t.test('surplus can be refunded or carried across days and QR charges only the remaining balance',async()=>{
+   const payer=await client('carry-owner'),other=await client('carry-other'),name='Giữ số dư mẫu',sourceDay='day-2099-08-01',nextDay='day-2099-08-02';
+   for(const date of ['2099-08-01','2099-08-02'])await admin.write({action:'day',create:true,date,menu,status:'open'});
+   let view=await payer.write({action:'order',dayId:sourceDay,name,dish:menu[1].name});const sourceId=view.orders[0].id;await admin.write({action:'paid',dayId:sourceDay,id:sourceId,paid:true});await payer.write({action:'cancel',dayId:sourceDay,id:sourceId});
+   assert.equal((await payer.read(sourceDay)).cancelledOrders?.[0].receivedAmount,50000);
+   await chooseSurplus(payer,{dayId:sourceDay,orderId:sourceId},'carry');assert.equal((await creditBalances(payer))[payer.auth.currentUser!.uid],50000);
+   await assert.rejects(admin.write({action:'refund',dayId:sourceDay,id:sourceId,amount:50000}));await assert.rejects(chooseSurplus(other,{dayId:sourceDay,orderId:sourceId},'refund'));
+   view=await payer.write({action:'order',dayId:nextDay,name,items:[{dish:menu[0].name,quantity:1}]});assert.equal(view.orders[0].paid,true);assert.equal(view.orders[0].creditInAmount,40000);assert.equal(view.creditBalances?.[payer.auth.currentUser!.uid],10000);
+   const stranger=await other.write({action:'order',dayId:nextDay,name:'Tên giống không lấy được dư',dish:menu[0].name});assert.equal(stranger.orders.find(o=>o.actor===other.auth.currentUser!.uid)?.paid,false);
+   const more=await payer.write({action:'order',dayId:nextDay,name,items:[{dish:menu[1].name,quantity:1}]}),unpaid=more.orders.find(o=>o.actor===payer.auth.currentUser!.uid&&!o.paid)!;assert.equal(unpaid.creditInAmount,10000);
+   const bank={bankBin:'970407',bankName:'Techcombank',accountNumber:'00012345678901',accountName:'NGUYEN VAN MAU'};await saveBankAccount(admin,bank);const intent=await requestPayment(payer,nextDay,unpaid.id);assert.equal(intent.amount,40000);
+   const bot=await client('carry-bank-bot');await bootstrap(PRIMARY_ADMIN_UID);const rootDb=environment.authenticatedContext(PRIMARY_ADMIN_UID,{email:'primary@example.test',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore() as unknown as Firestore;await setDoc(doc(rootDb,'paymentIntegrations',bot.auth.currentUser!.uid),{enabled:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+   const secret='c'.repeat(64),env={NODE_ENV:'test',NEXT_PUBLIC_FIREBASE_PROJECT_ID:project,NEXT_PUBLIC_FIREBASE_API_KEY:'fake-api-key',PAYMENT_WEBHOOK_SECRET:secret,PAYMENT_FIREBASE_REFRESH_TOKEN:bot.auth.currentUser!.refreshToken,FIRESTORE_EMULATOR_HOST:process.env.FIRESTORE_EMULATOR_HOST,FIREBASE_AUTH_EMULATOR_HOST:process.env.FIREBASE_AUTH_EMULATOR_HOST};
+   const payment=await bankWebhook(new Request('https://example.test/api/payments/bank-notification',{method:'POST',headers:{Authorization:'Bearer '+secret,'Content-Type':'text/plain'},body:'+ VND 40,000\nAccount: '+bank.accountNumber+'\nBalance: VND 900,000\n'+intent.reference}),env);assert.equal(payment.status,200);assert.equal((await payment.json()).status,'paid');const settled=(await getDoc(doc(payer.db,'days',nextDay,'orders',unpaid.id))).data()!;assert.equal(settled.receivedAmount,40000);assert.equal(settled.creditInAmount,10000);assert.equal(settled.paid,true);
+   const source=(await getDoc(doc(payer.db,'days',sourceDay,'orders',sourceId))).data()!;assert.equal(source.creditOutAmount,50000);assert.equal(source.receivedAmount,50000);assert.equal(orderFinance(source as never).creditAvailable,0);
+  });
+  await t.test('concurrent allocations cannot spend one credit twice and malformed paired transfers are denied',async()=>{
+   const payer=await client('carry-race'),other=await client('carry-race-other'),name='Dư đồng thời mẫu',days=['2099-09-01','2099-09-02','2099-09-03'];for(const date of days)await admin.write({action:'day',create:true,date,menu,status:'open'});
+   const sourceDay='day-'+days[0],p=await payer.write({action:'order',dayId:sourceDay,name,dish:menu[1].name}),sourceId=p.orders[0].id;await admin.write({action:'paid',dayId:sourceDay,id:sourceId,paid:true});await payer.write({action:'cancel',dayId:sourceDay,id:sourceId});
+   const targets=[];for(const date of days.slice(1)){const v=await payer.write({action:'order',dayId:'day-'+date,name,dish:menu[0].name});targets.push({dayId:'day-'+date,orderId:v.orders[0].id});}
+   await chooseSurplus(payer,{dayId:sourceDay,orderId:sourceId},'carry');
+   for(const period of ['today','week','month','all'] as const){const r=summarizeStatistics(await payer.statistics(),period,new Date('2099-09-03T12:00:00+07:00'));const person=r.people.find(p=>p.name===name);if(person)assert.equal(person.unpaid,Math.max(0,person.total-person.paid-person.creditOffset));}
+   const all=summarizeStatistics((await payer.statistics()).filter(o=>o.name===name),'all');assert.equal(all.creditOffset,50000);assert.equal(all.unpaid,30000);const today=summarizeStatistics((await payer.statistics()).filter(o=>o.name===name),'today',new Date('2099-09-03T12:00:00+07:00'));assert.equal(today.creditOffset,40000);assert.equal(today.unpaid,0);
+   await assertFails(updateDoc(doc(payer.db,'days',targets[0].dayId,'orders',targets[0].orderId),{creditInAmount:40000,paid:true,updatedAt:serverTimestamp()}));
+   await assertFails(setDoc(doc(other.db,'creditSources',sourceDay+'~'+sourceId),{dayId:sourceDay,orderId:sourceId,ownerId:other.auth.currentUser!.uid,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));
+   const result=await Promise.all([applyCredit(payer,[targets[0]]),applyCredit(payer,[targets[1]])]);assert.equal(result.reduce((a,b)=>a+b,0),50000);
+   const orders=await Promise.all(targets.map(ref=>getDoc(doc(payer.db,'days',ref.dayId,'orders',ref.orderId))));assert.equal(orders.reduce((sum,o)=>sum+(o.data()?.creditInAmount||0),0),50000);assert.equal(orders.reduce((sum,o)=>sum+orderFinance(o.data() as never).due,0),30000);
+   const transfers=await getDocs(collection(payer.db,'creditTransfers'));assert.ok(transfers.size>=2);for(const d of transfers.docs){await assertFails(updateDoc(d.ref,{amount:1}));await assertFails(deleteDoc(d.ref));}
+   const target=targets[0],code='c'.repeat(32),batch=writeBatch(payer.db);batch.update(doc(payer.db,'days',target.dayId,'orders',target.orderId),{creditInAmount:999999,lastCreditTransferId:code,paid:true,updatedAt:serverTimestamp()});batch.set(doc(payer.db,'creditTransfers',code),{ownerId:payer.auth.currentUser!.uid,sourceDayId:sourceDay,sourceOrderId:sourceId,targetDayId:target.dayId,targetOrderId:target.orderId,amount:999999,createdBy:payer.auth.currentUser!.uid,createdAt:serverTimestamp()});await assertFails(batch.commit());
+  });
+  await t.test('refund choice races safely with spending and Google linking preserves unspent credit',async()=>{
+   const payer=await client('carry-refund-race'),name='Dư hoàn mẫu',sourceDay='day-2099-10-01',nextDay='day-2099-10-02';for(const date of ['2099-10-01','2099-10-02'])await admin.write({action:'day',create:true,date,menu,status:'open'});
+   const p=await payer.write({action:'order',dayId:sourceDay,name,dish:menu[1].name}),sourceId=p.orders[0].id;await admin.write({action:'paid',dayId:sourceDay,id:sourceId,paid:true});await payer.write({action:'cancel',dayId:sourceDay,id:sourceId});const v=await payer.write({action:'order',dayId:nextDay,name,dish:menu[0].name}),targetId=v.orders[0].id;
+   await chooseSurplus(payer,{dayId:sourceDay,orderId:sourceId},'carry');await Promise.allSettled([applyCredit(payer,[{dayId:nextDay,orderId:targetId}]),chooseSurplus(payer,{dayId:sourceDay,orderId:sourceId},'refund')]);
+   const sourceRef=doc(payer.db,'days',sourceDay,'orders',sourceId);let source=(await getDoc(sourceRef)).data()!;if(orderFinance(source as never).surplus>0){await chooseSurplus(payer,{dayId:sourceDay,orderId:sourceId},'refund');source=(await getDoc(sourceRef)).data()!;await admin.write({action:'refund',dayId:sourceDay,id:sourceId,amount:orderFinance(source as never).refundDue});}
+   source=(await getDoc(sourceRef)).data()!;assert.equal((source.creditOutAmount||0)+(source.refundedAmount||0),50000);
+   const guest=await client('carry-link-guest'),target=await client('carry-link-google','carry-link-google'),name2='Số dư theo Google';const own=await guest.write({action:'order',dayId:sourceDay,name:name2,dish:menu[1].name}),id=own.orders.find(o=>o.name===name2)!.id;await admin.write({action:'paid',dayId:sourceDay,id,paid:true});await guest.write({action:'cancel',dayId:sourceDay,id});await chooseSurplus(guest,{dayId:sourceDay,orderId:id},'carry');
+   const from=guest.auth.currentUser!.uid,to=target.auth.currentUser!.uid;await setDoc(doc(guest.db,'accountLinks',from),{targetUid:to,createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+300000)});await moveGuestOrders(target.db,from,to);assert.equal((await creditBalances(target))[to],50000);
+   const order=await target.write({action:'order',dayId:nextDay,name:name2,items:[{dish:menu[0].name,quantity:1}]});assert.equal(order.orders.find(o=>o.name===name2)?.paid,true);assert.equal(order.creditBalances?.[to],10000);
+  });
+  await t.test('activity history is admin-only, immutable, identity-bound and includes dish changes without secrets',async()=>{
+   const payer=await client('audit-owner'),dayId='day-2099-11-01';await admin.write({action:'day',create:true,date:'2099-11-01',menu,status:'open'});
+   const p=await payer.write({action:'order',dayId,name:'Nhật ký mẫu',dish:menu[0].name,quantity:2,note:'Không hành'}),id=p.orders[0].id;await payer.write({action:'order',dayId,id,name:'Nhật ký mẫu',dish:menu[1].name,quantity:3,note:'Ít cơm'});await payer.write({action:'cancel',dayId,id});
+   await recordActivity(payer,{kind:'app.visit',summary:'Truy cập ứng dụng'});await assertFails(getDocs(collection(payer.db,'activityLogs')));
+   const events=await getDocs(collection(admin.db,'activityLogs')),own=events.docs.filter(e=>e.data().actorId===payer.auth.currentUser!.uid);assert.ok(own.some(e=>e.data().kind==='app.visit'));const changed=own.find(e=>e.data().kind==='order.update')!,details=JSON.parse(changed.data().details);assert.equal(details.before.dish,menu[0].name);assert.equal(details.after.dish,menu[1].name);assert.equal(details.after.quantity,3);assert.ok(own.some(e=>e.data().kind==='order.cancel'));
+   await assertFails(getDoc(doc(payer.db,'activityLogs',changed.id)));await assertFails(updateDoc(changed.ref,{summary:'hacked'}));await assertFails(deleteDoc(changed.ref));
+   await assertFails(setDoc(doc(payer.db,'activityLogs','a'.repeat(32)),activityValue(admin.auth.currentUser!.uid,{kind:'app.visit',summary:'Giả danh'})));
+   await assertFails(setDoc(doc(payer.db,'activityLogs','b'.repeat(32)),{...activityValue(payer.auth.currentUser!.uid,{kind:'bank.received',summary:'Giả ngân hàng'}),source:'bank'}));
+   assert.ok(events.docs.some(e=>e.data().kind==='bank.received'));assert.ok(events.docs.filter(e=>e.data().source==='bank').every(e=>!e.data().details.includes('Balance:')));
+  });
+
+
+  await t.test('reversing a source confirmation never removes credit already transferred to another order',async()=>{
+   const payer=await client('credit-void'),dayId='day-2099-12-01',name='Điều chỉnh tiền có số dư';await admin.write({action:'day',create:true,date:'2099-12-01',menu,status:'open'});
+   let view=await payer.write({action:'order',dayId,name,items:[{dish:menu[1].name,quantity:1}]}),sourceId=view.orders[0].id;await admin.write({action:'paid',dayId,id:sourceId,paid:true});await payer.write({action:'order',dayId,id:sourceId,name,dish:menu[0].name});await chooseSurplus(payer,{dayId,orderId:sourceId},'carry');
+   view=await payer.write({action:'order',dayId,name,items:[{dish:menu[1].name,quantity:1}]});const target=view.orders.find(o=>o.id!==sourceId)!;assert.equal(target.creditInAmount,10000);await admin.write({action:'paid',dayId,id:sourceId,paid:false});
+   const a=(await getDoc(doc(payer.db,'days',dayId,'orders',sourceId))).data()!,b=(await getDoc(doc(payer.db,'days',dayId,'orders',target.id))).data()!;assert.equal(a.receivedAmount,50000);assert.equal(a.voidedAmount,40000);assert.equal(a.creditOutAmount,10000);assert.equal(b.creditInAmount,10000);assert.equal(orderFinance(a as never).held,0);
   });
 
  }finally{const coverage=await fetch(`http://${host}:${port}/emulator/v1/projects/${project}:ruleCoverage`);fs.mkdirSync('.firebase',{recursive:true});fs.writeFileSync('.firebase/rules-coverage.json',await coverage.text());await Promise.all(databases.map(db=>terminate(db)));await Promise.all(apps.map(app=>deleteApp(app)));await environment.cleanup();}

@@ -54,3 +54,5 @@ For detailed Vietnamese operations, see [README.vi.md](../README.vi.md) and [dep
 ## Multiple dishes, partial balances and refunds
 
 See [orders, payment differences and restaurant sharing](orders-payments-sharing.md) for grouped QRs, resumable settlement, preserved paid amounts, administrator-confirmed refunds and expiring restaurant links. QR amounts now represent the remaining balance, which can be lower than the meal total. Publish the full updated Rules before deploying.
+
+Credit and activity history use the same Firebase project and Rules; see [credit and activity](credit-and-activity.md). Publish the full updated Rules before deploying. No extra composite index or privileged server credential is required.
