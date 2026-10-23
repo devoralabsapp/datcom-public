@@ -6,6 +6,7 @@ import type {Day,Order,Workspace} from './types';
 import {mealSession,type StatisticsOrder} from './statistics';
 import {ownAccess,syncUserProfile} from './user-management';
 import {rememberOrderName} from './order-name';
+import {isBankAccount} from './payment-model';
 
 export class MealClient{
  constructor(public auth:Auth,public db:Firestore,private source:Workspace){}
@@ -47,7 +48,7 @@ export class MealClient{
    orders=orderSnapshot.docs.filter(d=>!d.data().cancelled).map(d=>{const o=d.data();return {id:d.id,dayId:day.id,name:o.name,dish:o.dish,price:o.price,quantity:o.quantity,note:o.note,paid:o.paid,cancelled:o.cancelled,actor:o.ownerId,updatedAt:o.updatedAt?.toDate().toISOString()||'',canEdit:admin||o.ownerId===user.uid};});
   }
   const qr=payment.data()?.qrUrl;
-  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:typeof qr==='string'&&!!qr,paymentUrl:typeof qr==='string'?qr:''};
+  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
  }
  async write(body:Record<string,unknown>){
   const user=await ensureUser(this.auth),admin=await this.isAdmin();

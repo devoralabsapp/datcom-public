@@ -14,7 +14,7 @@ Mở [Firebase Console](https://console.firebase.google.com/) và chọn project
 
 Dùng Firestore **Standard**, database `(default)`. Nếu dựng bản mới, tạo database trước. Nếu tiếp quản hệ thống hiện tại, dùng đúng project/database đã được bàn giao.
 
-Sau khi đăng nhập Google lần đầu, lấy UID trong Authentication → Users. Thay **tất cả** chuỗi `PRIMARY_ADMIN_UID_HERE` trong `lib/user-model.ts` và `firestore.rules` bằng cùng UID đó. Giữ nguyên chuỗi đặt chỗ khi chỉ chạy kiểm thử; bắt buộc đổi trước khi dùng thật. `.firebaserc` không trỏ sẵn project; mọi lệnh deploy cần chỉ rõ `--project`.
+Sau khi đăng nhập Google lần đầu, lấy UID trong Authentication → Users. Thay **tất cả** chuỗi `PRIMARY_ADMIN_UID_HERE` trong `lib/user-model.ts` và `firestore.rules` bằng cùng UID đó trước khi dùng thật. `.firebaserc` không trỏ sẵn project; mọi lệnh deploy cần chỉ rõ `--project`.
 
 Mở Firestore Database → Rules, thay toàn bộ nội dung bằng [firestore.rules](../firestore.rules), bấm **Publish**. Rules có thể cần một khoảng thời gian ngắn để áp dụng. Nếu database dùng chung với app khác, xem xét các collection của app đó trước khi thay Rules; schema không được nêu trong file bị từ chối.
 
@@ -65,7 +65,11 @@ Bản quản trị người dùng cần Publish **toàn bộ file Rules mới nh
 
 ## 5. QR thanh toán (tùy chọn)
 
-Tạo document `settings/payment` với `qrUrl` là URL HTTPS của ảnh QR (tối đa 2.000 ký tự) hoặc data URL `data:image/png;base64,...` / JPEG (tối đa 200.000 ký tự). Thêm `updatedAt` kiểu Timestamp. Chỉ tài khoản có quyền Firebase Console hoặc quản trị viên qua Rules mới được ghi. Người dùng Firebase đã xác thực, gồm phiên khách, được đọc thông tin thanh toán.
+Quản trị mở **Thông tin chuyển khoản → Cài đặt tài khoản nhận tiền**, chọn ngân hàng, nhập số tài khoản/tên người nhận và lưu. Cần Publish Rules mới nhất trước khi lưu schema tài khoản. Mỗi đơn chưa trả có QR và mã `COM` riêng, số tiền khớp đơn; khách chỉ tạo QR đơn của mình, quản trị có thể tạo hộ. QR được dựng ngay trên trình duyệt.
+
+Để tự tích đã trả từ thông báo BIDV, xem [hướng dẫn QR và API Shortcut](bank-payments.md). Quản trị chính tạo kết nối trong cùng cửa sổ, sau đó đặt **`PAYMENT_WEBHOOK_SECRET` và `PAYMENT_FIREBASE_REFRESH_TOKEN` ở môi trường máy chủ Production của Vercel** rồi redeploy. Hai biến không có tiền tố `NEXT_PUBLIC_`; không dùng refresh token của tài khoản quản trị. Nếu chưa cấu hình API, chuyển khoản/QR và xác nhận thủ công vẫn dùng được. Parser hiện hỗ trợ thông báo BIDV theo mẫu đã kiểm thử; không tự coi thông báo ngân hàng khác là hợp lệ.
+
+Tương thích QR ảnh cũ: document `settings/payment` với `qrUrl` là URL HTTPS của ảnh QR (tối đa 2.000 ký tự) hoặc data URL `data:image/png;base64,...` / JPEG (tối đa 200.000 ký tự) và `updatedAt` kiểu Timestamp vẫn được đọc. Khi lưu tài khoản mới, schema này được thay bằng `bankBin`, `bankName`, `accountNumber`, `accountName`, `updatedAt`. Chỉ quản trị qua Rules mới được ghi từ web; người dùng Firebase đã xác thực, gồm phiên khách, được đọc thông tin nhận tiền.
 
 Không tự đưa QR ngân hàng thật vào Git. Nếu chưa cấu hình, web hiển thị thông báo liên hệ người gom cơm.
 

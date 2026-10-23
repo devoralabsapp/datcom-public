@@ -4,6 +4,7 @@ import "./interface.css";
 import "./statistics.css";
 import "./pickup.css";
 import "./users.css";
+import "./payment.css";
 
 export const metadata: Metadata = {
   title: "Cơm Nhà · Đặt cơm văn phòng",

@@ -17,6 +17,14 @@ rules_version = '2';
 // updatedAt. admins new writes: enabled bool, updatedBy128, updatedAt.
 // Primary admin alone changes other roles; no self/primary lockout or deletes.
 // Every other collection, including the legacy server schema, stays denied.
+// settings/payment bank schema: bankBin6, bankName100, accountNumber alnum34,
+// accountName70, updatedAt. Immutable paymentIntents bind an exact order/payee
+// snapshot to COM+20hex, an owner/admin requester and expiry<=24h. paymentLinks
+// select the current intent atomically. Primary-only paymentIntegrations grant
+// a dedicated anonymous bot; no administrator role is granted to that identity.
+// Immutable paymentReceipts and paymentTransactions pair one reference with
+// one bank/account/transaction hash. Bot writes only paid=true + updatedAt,
+// atomically with both records, using the unchanged current order/payee/link.
 service cloud.firestore {
  match /databases/{database}/documents {
   function signedIn(){return request.auth != null;}
@@ -69,7 +77,7 @@ service cloud.firestore {
     && d.targetUid is string && d.targetUid.matches('^[A-Za-z0-9_-]{1,128}$') && d.targetUid != sourceUid
     && d.createdAt == request.time && d.expiresAt is timestamp && d.expiresAt > request.time && d.expiresAt <= request.time + duration.value(10,'m');
   }
-  function validPayment(d){
+  function validLegacyPayment(d){
    return d.keys().hasAll(['qrUrl','updatedAt']) && d.keys().hasOnly(['qrUrl','updatedAt']) && d.qrUrl is string && d.qrUrl.size()<=200000
     && (d.qrUrl == '' || (d.qrUrl.size()<=2000 && d.qrUrl.matches('https://[^ ]+')) || d.qrUrl.matches('data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+')) && d.updatedAt == request.time;
   }
@@ -145,7 +153,65 @@ service cloud.firestore {
    allow create: if validLink(request.resource.data,sourceUid);
    allow delete: if signedIn() && (request.auth.uid == sourceUid || (googleUser() && resource.data.targetUid == request.auth.uid));
   }
-  match /settings/payment{allow read: if signedIn();allow create,update: if admin() && validPayment(request.resource.data);allow delete: if false;}
+  // Bank payee settings; legacy qrUrl remains readable during migration.
+  function bankFields(d){return d.bankBin is string && d.bankBin.matches('^[0-9]{6}$') && validText(d.bankName,100) && d.accountNumber is string && d.accountNumber.matches('^[A-Za-z0-9]{1,34}$') && validText(d.accountName,70);}
+  function validBankPayment(d){return d.keys().hasAll(['bankBin','bankName','accountNumber','accountName','updatedAt']) && d.keys().hasOnly(['bankBin','bankName','accountNumber','accountName','updatedAt']) && bankFields(d) && d.updatedAt==request.time;}
+  function paymentCode(code){return code is string && code.matches('^COM[A-F0-9]{20}$');}
+  function paymentBot(){return signedIn() && request.auth.token.firebase.sign_in_provider=='anonymous' && exists(/databases/$(database)/documents/paymentIntegrations/$(request.auth.uid)) && get(/databases/$(database)/documents/paymentIntegrations/$(request.auth.uid)).data.enabled==true;}
+  function paymentOrderAccess(dayId,orderId){return signedIn() && (get(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.ownerId==request.auth.uid || admin() || paymentBot());}
+  // Immutable intent: account + exact current order snapshot, at most 24h.
+  function validPaymentIntent(d,code){
+   let o=get(/databases/$(database)/documents/days/$(d.dayId)/orders/$(d.orderId)).data;
+   let bank=get(/databases/$(database)/documents/settings/payment).data;
+   return d.keys().hasAll(['bankBin','bankName','accountNumber','accountName','reference','dayId','orderId','ownerId','requestedBy','name','amount','dishId','price','quantity','description','orderCreatedAt','bankConfigUpdatedAt','createdAt','expiresAt'])
+    && d.keys().hasOnly(['bankBin','bankName','accountNumber','accountName','reference','dayId','orderId','ownerId','requestedBy','name','amount','dishId','price','quantity','description','orderCreatedAt','bankConfigUpdatedAt','createdAt','expiresAt'])
+    && paymentCode(code) && d.reference==code && d.dayId is string && d.dayId.matches('^[A-Za-z0-9_-]{1,100}$') && d.orderId is string && d.orderId.matches('^[a-f0-9]{64}$')
+    && (o.ownerId==request.auth.uid || admin()) && d.requestedBy==request.auth.uid && validUid(d.requestedBy) && validUid(d.ownerId) && d.ownerId==o.ownerId && validText(d.name,100) && d.name==o.name
+    && o.paid==false && o.cancelled==false && d.orderCreatedAt==o.createdAt && d.dishId==o.dishId && d.price==o.price && d.quantity==o.quantity && d.amount is int && d.amount==o.price*o.quantity
+    && bankFields(d) && d.bankBin==bank.bankBin && d.bankName==bank.bankName && d.accountNumber==bank.accountNumber && d.accountName==bank.accountName && d.bankConfigUpdatedAt==bank.updatedAt
+    && validText(d.description,50) && d.description.matches('.*'+code+'.*') && d.createdAt==request.time && d.expiresAt is timestamp && d.expiresAt>request.time && d.expiresAt<=request.time+duration.value(1,'d')
+    && getAfter(/databases/$(database)/documents/paymentLinks/$(d.dayId)/orders/$(d.orderId)).data.reference==code;
+  }
+  function validPaymentLink(d,dayId,orderId){
+   let intent=getAfter(/databases/$(database)/documents/paymentIntents/$(d.reference)).data;
+   return d.keys().hasAll(['reference','updatedAt']) && d.keys().hasOnly(['reference','updatedAt']) && paymentCode(d.reference) && d.updatedAt==request.time && intent.dayId==dayId && intent.orderId==orderId && intent.createdAt==request.time;
+  }
+  function validIntegration(d,uid,creating){return request.auth.uid=='PRIMARY_ADMIN_UID_HERE' && admin() && validUid(uid) && uid!=request.auth.uid && d.keys().hasAll(['enabled','createdAt','updatedAt']) && d.keys().hasOnly(['enabled','createdAt','updatedAt']) && d.enabled is bool && d.createdAt is timestamp && d.createdAt==(creating?request.time:resource.data.createdAt) && d.updatedAt==request.time;}
+  function validPaymentReceipt(d,code){
+   let intent=get(/databases/$(database)/documents/paymentIntents/$(code)).data;
+   let o=get(/databases/$(database)/documents/days/$(intent.dayId)/orders/$(intent.orderId)).data;
+   let bank=get(/databases/$(database)/documents/settings/payment).data;
+   return d.keys().hasAll(['reference','transactionKey','transactionId','amount','bankBin','accountNumber','occurredAt','notificationHash','createdBy','createdAt']) && d.keys().hasOnly(['reference','transactionKey','transactionId','amount','bankBin','accountNumber','occurredAt','notificationHash','createdBy','createdAt'])
+    && paymentCode(code) && d.reference==code && d.createdBy==request.auth.uid && d.createdAt==request.time && d.transactionId is string && d.transactionId.matches('^[A-Za-z0-9._/-]{1,120}$')
+    && d.transactionKey==hash(d.bankBin+'|'+d.accountNumber+'|'+d.transactionId) && d.notificationHash is string && d.notificationHash.matches('^[a-f0-9]{64}$')
+    && d.amount is int && d.amount==intent.amount && d.amount==o.price*o.quantity && d.bankBin==intent.bankBin && d.accountNumber==intent.accountNumber
+    && bank.bankBin==intent.bankBin && bank.accountNumber==intent.accountNumber && bank.updatedAt==intent.bankConfigUpdatedAt
+    && intent.expiresAt>request.time && o.paid==false && o.cancelled==false && o.ownerId==intent.ownerId && o.createdAt==intent.orderCreatedAt && o.dishId==intent.dishId && o.price==intent.price && o.quantity==intent.quantity
+    && d.occurredAt is timestamp && d.occurredAt>=intent.createdAt-duration.value(2,'m') && d.occurredAt<=request.time+duration.value(5,'m') && d.occurredAt<=intent.expiresAt
+    && get(/databases/$(database)/documents/paymentLinks/$(intent.dayId)/orders/$(intent.orderId)).data.reference==code
+    && !exists(/databases/$(database)/documents/paymentTransactions/$(d.transactionKey)) && getAfter(/databases/$(database)/documents/paymentTransactions/$(d.transactionKey)).data.reference==code
+    && getAfter(/databases/$(database)/documents/days/$(intent.dayId)/orders/$(intent.orderId)).data.paid==true;
+  }
+  function webhookPayment(dayId,orderId,d){
+   let code=get(/databases/$(database)/documents/paymentLinks/$(dayId)/orders/$(orderId)).data.reference;
+   let receipt=getAfter(/databases/$(database)/documents/paymentReceipts/$(code)).data;
+   return paymentBot() && resource.data.paid==false && resource.data.cancelled==false && d.paid==true && d.diff(resource.data).affectedKeys().hasOnly(['paid','updatedAt'])
+    && !exists(/databases/$(database)/documents/paymentReceipts/$(code)) && receipt.reference==code && receipt.createdAt==request.time && receipt.createdBy==request.auth.uid && receipt.amount==resource.data.price*resource.data.quantity;
+  }
+  match /settings/payment{allow read: if signedIn();allow create,update: if admin() && (validBankPayment(request.resource.data) || validLegacyPayment(request.resource.data));allow delete: if false;}
+  match /paymentIntegrations/{uid}{allow get: if admin() || (signedIn() && uid==request.auth.uid);allow list: if admin();allow create: if validIntegration(request.resource.data,uid,true);allow update: if validIntegration(request.resource.data,uid,false);allow delete: if false;}
+  match /paymentIntents/{code}{allow get: if signedIn() && (paymentBot() || admin() || (resource!=null && resource.data.ownerId==request.auth.uid));allow list: if admin();allow create: if signedIn() && validPaymentIntent(request.resource.data,code);allow update,delete: if false;}
+  match /paymentLinks/{dayId}/orders/{orderId}{allow get: if paymentOrderAccess(dayId,orderId);allow list: if admin();allow create,update: if paymentOrderAccess(dayId,orderId) && !paymentBot() && validPaymentLink(request.resource.data,dayId,orderId);allow delete: if false;}
+  match /paymentReceipts/{code}{
+   allow get: if signedIn() && (paymentBot() || admin() || get(/databases/$(database)/documents/paymentIntents/$(code)).data.ownerId==request.auth.uid);allow list: if admin();
+   allow create: if paymentBot() && validPaymentReceipt(request.resource.data,code);allow update,delete: if false;
+  }
+  match /paymentTransactions/{key}{
+   allow get: if paymentBot() || admin();allow list: if admin();
+   allow create: if paymentBot() && key.matches('^[a-f0-9]{64}$') && request.resource.data.keys().hasAll(['reference','createdAt']) && request.resource.data.keys().hasOnly(['reference','createdAt']) && paymentCode(request.resource.data.reference) && request.resource.data.createdAt==request.time
+    && getAfter(/databases/$(database)/documents/paymentReceipts/$(request.resource.data.reference)).data.transactionKey==key && getAfter(/databases/$(database)/documents/paymentReceipts/$(request.resource.data.reference)).data.createdAt==request.time;
+   allow update,delete: if false;
+  }
   match /days/{dayId}{
    allow read: if signedIn();
    allow create: if admin() && dayId.matches('^[A-Za-z0-9_-]{1,100}$') && validDay(request.resource.data);
@@ -163,7 +229,8 @@ service cloud.firestore {
     allow create: if signedIn() && activeUser() && validOrder(request.resource.data,orderId) && request.resource.data.ownerId == request.auth.uid
      && request.resource.data.createdAt == request.time && request.resource.data.paid == false && request.resource.data.cancelled == false && openDay(dayId) && menuPrice(dayId,request.resource.data);
     allow update: if signedIn() && parentExists(dayId) && validOrder(request.resource.data,orderId) && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.name == resource.data.name && (
-     (recipient(resource.data.ownerId) && request.resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']))
+     (paymentBot() && webhookPayment(dayId,orderId,request.resource.data))
+     || (recipient(resource.data.ownerId) && request.resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']))
      || (request.resource.data.ownerId == resource.data.ownerId && (
       (admin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid','updatedAt']))
       || (((ownOrder() && (activeUser() || (request.resource.data.cancelled==true && request.resource.data.paid==false && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cancelled','paid','updatedAt'])))) || admin()) && openDay(dayId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dishId','dish','price','quantity','note','paid','cancelled','updatedAt'])

@@ -115,3 +115,8 @@ Lỗi “chưa cấu hình Firebase”: kiểm tra các biến Web config và bu
 Hồ sơ/người dùng được tổng hợp từ hoạt động web và lịch sử chủ đơn, không phải danh sách đầy đủ trong Firebase Authentication. Lượt vòng quay tính theo tên chuẩn hóa; hai tên khác nhau được coi là hai người. Rules kiểm tra quyền/cấu trúc kết quả nhưng không tính lại toàn bộ thuật toán ngẫu nhiên. Ảnh minh họa đang liên kết tới nguồn bên ngoài được ghi ở README; cần kiểm tra quyền sử dụng hoặc thay bằng ảnh của đơn vị khi phát hành dưới thương hiệu riêng.
 
 I've set up prototype Security Rules to keep the data in Firestore safe. They are designed to be secure for owner/admin writes, private user profiles and primary-only role changes. However, you should review and verify them before broadly sharing your app. If you'd like, I can help you harden these rules.
+
+
+## 8. QR theo đơn và API nhận thông báo BIDV
+
+Quản trị có thể lưu ngân hàng/số tài khoản/tên nhận tiền ngay trên web, khách tạo QR cho đơn chưa trả của mình. [Hướng dẫn API Shortcut](bank-payments.md) có định dạng thông báo nguyên văn, các phản hồi và cách tạo/ngắt danh tính API giới hạn quyền. Cần Publish Rules mới và thêm hai biến máy chủ `PAYMENT_WEBHOOK_SECRET`, `PAYMENT_FIREBASE_REFRESH_TOKEN` trên đúng môi trường Vercel để tự đối chiếu; không cần OIDC hoặc service account. QR và xác nhận thủ công vẫn hoạt động khi API chưa được cấu hình. Bản hiện tại có 33 bài kiểm thử, gồm gửi trùng đồng thời, số dư so với tiền vào, sai tài khoản/giá, hết hạn và thu hồi kết nối.
