@@ -1,7 +1,7 @@
 {
   "score": 4,
-  "summary": "Prototype Rules enforce shared meal reads, owner/admin edits, multi-dish name claims, incrementally verified payment groups, immutable bank receipts and settlement markers, preserved money on paid edits/cancellations, and paired immutable administrator reconciliation events. Restaurant links allow only active, unexpired capability gets; administrative roles and private profiles remain restricted.",
-  "verification": "54 tests passed against local Standard Auth/Firestore emulators, including direct SDK attacks, ten-line carts with prior QR links, grouped twelve-line payments over six days, rejected stale groups, interrupted settlement recovery, replay protection, partial top-ups through both single and grouped QRs, legacy opening balances, concurrent refunds, cancellation refunds, and share get/list/revocation/expiry. Browser QA verified three dishes with quantities 2/3/1, a nine-line three-day QR, local fake bank settlement, edit 80k to 120k retaining 80k with 40k due, cancellation retaining an 80k refund and administrator confirmation, VI/EN, and restaurant link creation/revocation. Single-page PDF and three exported JPG pages were visually inspected; multi-page PDF assembly uses the same exported images. No production bank transaction was performed. Rules publication is a separate operator action.",
+  "summary": "Prototype Rules enforce shared meal reads, owner/admin edits, multi-dish name claims, incrementally verified payment groups, immutable bank receipts and settlement markers, preserved money on paid edits/cancellations, and paired immutable administrator reconciliation events. Restaurant links allow only active, unexpired capability gets; administrative roles and private profiles remain restricted. Carryover adds same-owner source/target money transfers with immutable ledgers and controlled credit pointers. Activity history is administrator-readable and append-only; client events are identity-bound, bank acceptance events are paired with receipts.",
+  "verification": "59 tests passed against Standard Auth/Firestore emulators, including prior ordering/payment/role/share flows plus credit across days, exact cash shortfalls, simultaneous allocations, refund-choice races, forged paired transfers, guest-to-Google credit ownership, reversal after outgoing credit, and administrator-only immutable activity history. Build and type checking passed. Browser QA verified an 80k paid sample reduced to 40k, keeping 40k credit, applying it to a 50k meal and settling only the remaining 10k through a local fake bank notification. No production financial transaction was performed.",
   "findings": [
     {
       "check": "Abuse controls",
@@ -14,6 +14,18 @@
       "severity": "minor",
       "issue": "Administrators are trusted to create restaurant JSON payloads. App projection omits user/payment fields, but free-text notes may contain personal information. Anyone holding an active link can access it, and downloaded copies cannot be revoked.",
       "recommendation": "Review notes before sharing; revoke links when no longer needed. Use separate projects for untrusted previews."
+    },
+    {
+      "check": "Activity provenance and completeness",
+      "severity": "minor",
+      "issue": "App-origin events are client-reported. Direct external SDK/Console changes can bypass application telemetry, and visits may be absent while offline. Users can append claims about their own app activity; they cannot impersonate another actor or bank acceptance.",
+      "recommendation": "Use immutable receipts and paired financial/credit ledgers as the authority for money. Do not treat client telemetry as a forensic security audit. Add trusted database change capture separately if required."
+    },
+    {
+      "check": "Read volume",
+      "severity": "minor",
+      "issue": "Credit balances are derived from current source orders, and source pointers retain history. Read volume grows with the number of carryover sources.",
+      "recommendation": "Monitor Firestore usage and consider a trusted materialized balance/active-source index at larger scale without weakening paired-transfer validation."
     }
   ],
   "attacks": [
@@ -132,6 +144,14 @@
     {
       "check": "Group amount tampering, stale QR after order edit, unauthorized resume, public share listing and edits, non-admin share creation/revocation",
       "result": "blocked; owner resume only finishes accepted bank receipts"
+    },
+    {
+      "check": "Cross-owner credit, forged balance increases, same-name account collisions, concurrent duplicate spending/refund and edited/deleted transfer history",
+      "result": "blocked; UID-bound balances and paired immutable transfers validated"
+    },
+    {
+      "check": "Non-admin activity reads, forged actor identities, client-written bank acceptance events and activity edits/deletes",
+      "result": "blocked; app claims remain client-originated and are not a money authority"
     }
   ],
   "assumptions": [

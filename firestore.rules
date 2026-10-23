@@ -53,37 +53,40 @@ service cloud.firestore {
   }
   function validOrder(d,orderId){
    return d.keys().hasAll(['name','ownerId','dishId','dish','price','quantity','note','paid','cancelled','createdAt','updatedAt'])
-    && d.keys().hasOnly(['name','ownerId','dishId','dish','price','quantity','note','paid','cancelled','createdAt','updatedAt','receivedAmount','refundedAmount','voidedAmount','paymentEventId']) && validMoney(d)
+    && d.keys().hasOnly(['name','ownerId','dishId','dish','price','quantity','note','paid','cancelled','createdAt','updatedAt','receivedAmount','refundedAmount','voidedAmount','paymentEventId','creditInAmount','creditOutAmount','surplusChoice','lastCreditTransferId']) && validMoney(d)
     && validText(d.name,100) && orderId.matches('^'+hash(d.name)+'(_([1-9]|[12][0-9]|30))?$') && d.ownerId is string && d.ownerId.size()>0 && d.ownerId.size()<=128
     && d.dishId is string && d.dishId.matches('^[a-f0-9]{64}$') && validText(d.dish,160) && d.price is int && d.price>=1000 && d.price<=1000000
     && d.quantity is int && d.quantity>=1 && d.quantity<=30 && d.note is string && d.note.size()<=300 && d.paid is bool && d.cancelled is bool
     && d.createdAt is timestamp && d.updatedAt == request.time;
   }
-  function received(d){return d.get('receivedAmount',d.paid?d.price*d.quantity:0);}
+  function received(d){return 'receivedAmount' in d?d.receivedAmount:(d.paid?d.price*d.quantity:0);}
   function refunded(d){return d.get('refundedAmount',0);}
   function voided(d){return d.get('voidedAmount',0);}
-  function held(d){return received(d)-refunded(d)-voided(d);}
+  function creditIn(d){return d.get('creditInAmount',0);}
+  function creditOut(d){return d.get('creditOutAmount',0);}
+  function choice(d){return d.get('surplusChoice','refund');}
+  function held(d){return received(d)+creditIn(d)-creditOut(d)-refunded(d)-voided(d);}
   function owed(d){return d.cancelled?0:d.price*d.quantity;}
-  function due(d){return owed(d)>held(d)?owed(d)-held(d):0;}
-  function refundDue(d){return held(d)>owed(d)?held(d)-owed(d):0;}
-  function validMoney(d){let r=received(d);let f=refunded(d);let v=voided(d);let e=d.get('paymentEventId','');return r is int && r>=0 && r<=1000000000 && f is int && f>=0 && v is int && v>=0 && r-f-v>=0 && e is string && e.size()<=32;}
-  function derivedPaid(d){return d.paid==(!d.cancelled && due(d)==0);}
-  function moneyUnchanged(a,b){return received(a)==received(b) && refunded(a)==refunded(b) && voided(a)==voided(b);}
-  function bankMoney(d,amount){return received(d)==received(resource.data)+amount && refunded(d)==refunded(resource.data) && voided(d)==voided(resource.data) && derivedPaid(d);}
+  function due(d){let total=owed(d);let balance=held(d);return total>balance?total-balance:0;}
+  function refundDue(d){let total=owed(d);let balance=held(d);return balance>total?balance-total:0;}
+  function validMoney(d){let r=received(d);let f=refunded(d);let v=voided(d);let ci=creditIn(d);let co=creditOut(d);let c=choice(d);let e=d.get('paymentEventId','');let last=d.get('lastCreditTransferId','');return r is int && r>=0 && r<=1000000000 && f is int && f>=0 && v is int && v>=0 && ci is int && ci>=0 && ci<=1000000000 && co is int && co>=0 && co<=1000000000 && r+ci-co-f-v>=0 && c in ['refund','carry'] && last is string && last.size()<=32 && e is string && e.size()<=32;}
+  function derivedPaid(d){return d.paid==(!d.cancelled && held(d)>=d.price*d.quantity);}
+  function moneyUnchanged(a,b){return received(a)==received(b) && refunded(a)==refunded(b) && voided(a)==voided(b) && creditIn(a)==creditIn(b) && creditOut(a)==creditOut(b) && choice(a)==choice(b);}
+  function bankMoney(d,amount){return received(d)==received(resource.data)+amount && refunded(d)==refunded(resource.data) && voided(d)==voided(resource.data) && creditIn(d)==creditIn(resource.data) && creditOut(d)==creditOut(resource.data) && choice(d)==choice(resource.data) && derivedPaid(d); }
   function financialEvent(dayId,orderId,d){
    let id=d.get('paymentEventId','');
    let path=/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)/financialEvents/$(id);
    let e=getAfter(path).data;
-   let r=received(resource.data);let f=refunded(resource.data);let v=voided(resource.data);
-   let nr=received(d);let nf=refunded(d);let nv=voided(d);
-   let amount=owed(resource.data)-r+f+v;
+   let old=resource.data;
+   let values=[received(old),old.get('refundedAmount',0),old.get('voidedAmount',0),old.get('creditInAmount',0),old.get('creditOutAmount',0),old.get('surplusChoice','refund')];
+   let amount=(old.cancelled?0:old.price*old.quantity)-values[0]+values[1]+values[2]-values[3]+values[4];
    return id.matches('^[a-f0-9]{32}$') && !exists(path) && e.createdAt==request.time && e.createdBy==request.auth.uid
-    && e.beforeReceived==r && e.beforeRefunded==f && e.beforeVoided==v
-    && e.afterReceived==nr && e.afterRefunded==nf && e.afterVoided==nv
-    && derivedPaid(d) && d.diff(resource.data).affectedKeys().hasOnly(['paid','receivedAmount','refundedAmount','voidedAmount','paymentEventId','updatedAt'])
-    && ((e.kind=='receive' && !resource.data.cancelled && amount>0 && nr==r+amount && nf==f && nv==v)
-     || (e.kind=='void' && !resource.data.cancelled && r-f-v>0 && nv==r-f && nr==r && nf==f)
-     || (e.kind=='refund' && amount<0 && nf==f-amount && nr==r && nv==v));
+    && e.beforeReceived==values[0] && e.beforeRefunded==values[1] && e.beforeVoided==values[2]
+    && e.afterReceived==d.receivedAmount && e.afterRefunded==d.refundedAmount && e.afterVoided==d.voidedAmount
+    && d.creditInAmount==values[3] && d.creditOutAmount==values[4] && d.surplusChoice==values[5] && derivedPaid(d) && d.diff(old).affectedKeys().hasOnly(['paid','receivedAmount','refundedAmount','voidedAmount','creditInAmount','creditOutAmount','surplusChoice','paymentEventId','updatedAt'])
+    && ((e.kind=='receive' && !old.cancelled && amount>0 && d.receivedAmount==values[0]+amount && d.refundedAmount==values[1] && d.voidedAmount==values[2])
+     || (e.kind=='void' && values[3]==0 && !old.cancelled && values[0]-values[1]-values[2]-values[4]>0 && d.voidedAmount==values[0]-values[1]-values[4] && d.receivedAmount==values[0] && d.refundedAmount==values[1])
+     || (e.kind=='refund' && values[5]=='refund' && amount<0 && d.refundedAmount==values[1]-amount && d.receivedAmount==values[0] && d.voidedAmount==values[2]));
   }
   match /days/{dayId}/orders/{orderId}/financialEvents/{eventId}{
    allow read: if signedIn();
@@ -102,6 +105,42 @@ service cloud.firestore {
   function ownOrder(){return signedIn() && resource.data.ownerId == request.auth.uid;}
   function parentExists(dayId){return exists(/databases/$(database)/documents/days/$(dayId));}
   function correctPayment(d){return moneyUnchanged(d,resource.data) && derivedPaid(d);}
+  function creditPointerMove(dayId,orderId){let p=/databases/$(database)/documents/creditSources/$(dayId+'~'+orderId);return !exists(p) || getAfter(p).data.ownerId==request.auth.uid;}
+  function surplusChange(dayId,orderId,d){
+   return refundDue(resource.data)>0 && received(d)==received(resource.data) && refunded(d)==refunded(resource.data) && voided(d)==voided(resource.data) && creditIn(d)==creditIn(resource.data) && creditOut(d)==creditOut(resource.data) && d.paid==resource.data.paid
+    && d.diff(resource.data).affectedKeys().hasOnly(['surplusChoice','receivedAmount','refundedAmount','voidedAmount','creditInAmount','creditOutAmount','updatedAt'])
+    && (choice(d)=='refund' || getAfter(/databases/$(database)/documents/creditSources/$(dayId+'~'+orderId)).data.ownerId==resource.data.ownerId);
+  }
+  function linkedCreditTransfer(dayId,orderId,d){
+   let id=d.get('lastCreditTransferId','');let p=/databases/$(database)/documents/creditTransfers/$(id);let e=getAfter(p).data;
+   return id.matches('^[a-f0-9]{32}$') && id!=resource.data.get('lastCreditTransferId','') && !exists(p) && e.createdAt==request.time && e.createdBy==request.auth.uid
+    && ((e.sourceDayId==dayId && e.sourceOrderId==orderId)||(e.targetDayId==dayId && e.targetOrderId==orderId));
+  }
+  function validCreditSource(d,key){return d.keys().hasAll(['dayId','orderId','ownerId','createdAt','updatedAt']) && d.keys().hasOnly(['dayId','orderId','ownerId','createdAt','updatedAt']) && validUid(d.ownerId) && key==d.dayId+'~'+d.orderId && d.dayId is string && d.dayId.matches('^[A-Za-z0-9_-]{1,100}$') && d.orderId is string && d.orderId.matches('^[a-f0-9]{64}(_([1-9]|[12][0-9]|30))?$') && d.createdAt is timestamp && d.updatedAt==request.time;}
+  match /creditSources/{key}{
+   allow read: if signedIn();
+   allow create: if signedIn() && validCreditSource(request.resource.data,key) && request.resource.data.createdAt==request.time && (request.resource.data.ownerId==request.auth.uid || admin()) && getAfter(/databases/$(database)/documents/days/$(request.resource.data.dayId)/orders/$(request.resource.data.orderId)).data.ownerId==request.resource.data.ownerId && choice(getAfter(/databases/$(database)/documents/days/$(request.resource.data.dayId)/orders/$(request.resource.data.orderId)).data)=='carry';
+   allow update: if signedIn() && validCreditSource(request.resource.data,key) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']) && recipient(resource.data.ownerId) && request.resource.data.ownerId==request.auth.uid && getAfter(/databases/$(database)/documents/days/$(resource.data.dayId)/orders/$(resource.data.orderId)).data.ownerId==request.auth.uid;
+   allow delete: if false;
+  }
+  function validCreditTransfer(e,id){
+   let sp=/databases/$(database)/documents/days/$(e.sourceDayId)/orders/$(e.sourceOrderId);let tp=/databases/$(database)/documents/days/$(e.targetDayId)/orders/$(e.targetOrderId);
+   let a=get(sp).data;let b=get(tp).data;let na=getAfter(sp).data;let nb=getAfter(tp).data;
+   let va=[received(a),a.get('refundedAmount',0),a.get('voidedAmount',0),a.get('creditInAmount',0),a.get('creditOutAmount',0),a.get('surplusChoice','refund')];
+   let vb=[received(b),b.get('refundedAmount',0),b.get('voidedAmount',0),b.get('creditInAmount',0),b.get('creditOutAmount',0),b.get('surplusChoice','refund')];
+   let ah=va[0]-va[1]-va[2]+va[3]-va[4];let bh=vb[0]-vb[1]-vb[2]+vb[3]-vb[4];
+   return id.matches('^[a-f0-9]{32}$') && e.keys().hasAll(['ownerId','sourceDayId','sourceOrderId','targetDayId','targetOrderId','amount','createdBy','createdAt']) && e.keys().hasOnly(['ownerId','sourceDayId','sourceOrderId','targetDayId','targetOrderId','amount','createdBy','createdAt'])
+    && sp!=tp && e.ownerId==a.ownerId && a.ownerId==b.ownerId && (a.ownerId==request.auth.uid || admin()) && e.createdBy==request.auth.uid && e.createdAt==request.time && e.amount is int && e.amount>0 && e.amount<=30000000
+    && va[5]=='carry' && ah-(a.cancelled?0:a.price*a.quantity)>=e.amount && !b.cancelled && b.price*b.quantity-bh>=e.amount
+    && na.lastCreditTransferId==id && nb.lastCreditTransferId==id && na.updatedAt==request.time && nb.updatedAt==request.time
+    && na.diff(a).affectedKeys().hasOnly(['creditOutAmount','creditInAmount','surplusChoice','receivedAmount','refundedAmount','voidedAmount','lastCreditTransferId','paid','updatedAt']) && nb.diff(b).affectedKeys().hasOnly(['creditOutAmount','creditInAmount','surplusChoice','receivedAmount','refundedAmount','voidedAmount','lastCreditTransferId','paid','updatedAt'])
+    && na.creditOutAmount==va[4]+e.amount && na.creditInAmount==va[3] && na.receivedAmount==va[0] && na.refundedAmount==va[1] && na.voidedAmount==va[2] && na.surplusChoice==va[5]
+    && nb.creditInAmount==vb[3]+e.amount && nb.creditOutAmount==vb[4] && nb.receivedAmount==vb[0] && nb.refundedAmount==vb[1] && nb.voidedAmount==vb[2] && nb.surplusChoice==vb[5] && na.paid==(!a.cancelled && ah-e.amount>=a.price*a.quantity) && nb.paid==(bh+e.amount>=b.price*b.quantity);
+  }
+  match /creditTransfers/{id}{allow read: if signedIn();allow create: if signedIn() && validCreditTransfer(request.resource.data,id);allow update,delete: if false;}
+  function validActivity(d){return d.keys().hasAll(['kind','actorId','source','summary','dayId','orderId','reference','details','createdAt']) && d.keys().hasOnly(['kind','actorId','source','summary','dayId','orderId','reference','details','createdAt']) && d.actorId==request.auth.uid && d.createdAt==request.time && d.source in ['app','bank'] && d.kind in ['app.visit','page.view','auth.signin','auth.signout','order.create','order.update','order.cancel','order.transfer','menu.save','payment.receive','payment.void','payment.refund','payment.qr','bank.received','bank.notice','app.error','payment.settings','credit.choice','credit.apply','user.block','user.role','pickup.draw','share.create','share.revoke','export.pdf','export.jpg','export.csv'] && d.summary is string && d.summary.size()>0 && d.summary.size()<=500 && d.details is string && d.details.size()<=24000 && d.dayId is string && d.dayId.size()<=100 && d.orderId is string && d.orderId.size()<=70 && d.reference is string && d.reference.size()<=23;}
+  match /activityLogs/{id}{allow read: if admin();allow create: if signedIn() && id.matches('^[A-Za-z0-9_-]{20,32}$') && validActivity(request.resource.data) && (request.resource.data.source=='app' ? !request.resource.data.kind.matches('^bank[.].*') : (paymentBot() && (request.resource.data.kind=='bank.notice' || (request.resource.data.kind=='bank.received' && getAfter(/databases/$(database)/documents/paymentReceipts/$(request.resource.data.reference)).data.createdBy==request.auth.uid && getAfter(/databases/$(database)/documents/paymentReceipts/$(request.resource.data.reference)).data.createdAt==request.time))));allow update,delete: if false;}
+
   function validLink(d,sourceUid){
    return d.keys().hasAll(['targetUid','createdAt','expiresAt']) && d.keys().hasOnly(['targetUid','createdAt','expiresAt'])
     && signedIn() && sourceUid == request.auth.uid && request.auth.token.firebase.sign_in_provider == 'anonymous'
@@ -359,13 +398,15 @@ service cloud.firestore {
     // Editing, cancellation, payment and ownership transfer remain checked below.
     allow get,list: if signedIn() && parentExists(dayId);
     allow create: if signedIn() && activeUser() && validOrder(request.resource.data,orderId) && (request.resource.data.ownerId == request.auth.uid || admin())
-     && request.resource.data.createdAt == request.time && request.resource.data.paid == false && request.resource.data.cancelled == false && received(request.resource.data)==0 && refunded(request.resource.data)==0 && voided(request.resource.data)==0 && request.resource.data.get('paymentEventId','')=='' && personOrderAccess(dayId,orderId,request.resource.data) && openDay(dayId) && menuPrice(dayId,request.resource.data);
+     && request.resource.data.createdAt == request.time && request.resource.data.paid == false && request.resource.data.cancelled == false && received(request.resource.data)==0 && refunded(request.resource.data)==0 && voided(request.resource.data)==0 && creditIn(request.resource.data)==0 && creditOut(request.resource.data)==0 && choice(request.resource.data)=='refund' && request.resource.data.get('lastCreditTransferId','')=='' && request.resource.data.get('paymentEventId','')=='' && personOrderAccess(dayId,orderId,request.resource.data) && openDay(dayId) && menuPrice(dayId,request.resource.data);
     allow update: if signedIn() && parentExists(dayId) && validOrder(request.resource.data,orderId) && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.name == resource.data.name && (
      (paymentBot() && (get(/databases/$(database)/documents/paymentLinks/$(dayId)/orders/$(orderId)).data.get('kind','single')=='group'?webhookGroupPayment(dayId,orderId,request.resource.data):webhookPayment(dayId,orderId,request.resource.data)))
-     || (recipient(resource.data.ownerId) && request.resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']) && editableLinkedOrder(dayId,orderId))
+     || (request.resource.data.ownerId != resource.data.ownerId && request.resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']) && recipient(resource.data.ownerId) && editableLinkedOrder(dayId,orderId) && creditPointerMove(dayId,orderId))
      || (editableLinkedOrder(dayId,orderId) && request.resource.data.ownerId == resource.data.ownerId && (
-      (admin() && request.resource.data.get('paymentEventId','')!=resource.data.get('paymentEventId','') && financialEvent(dayId,orderId,request.resource.data))
-      || (((ownOrder() && (activeUser() || (request.resource.data.cancelled==true && request.resource.data.paid==false && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cancelled','paid','receivedAmount','refundedAmount','voidedAmount','updatedAt'])))) || admin()) && openDay(dayId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dishId','dish','price','quantity','note','paid','cancelled','receivedAmount','refundedAmount','voidedAmount','updatedAt'])
+      (choice(request.resource.data)!=choice(resource.data) && (ownOrder() || admin()) && surplusChange(dayId,orderId,request.resource.data))
+      || (request.resource.data.get('lastCreditTransferId','')!=resource.data.get('lastCreditTransferId','') && linkedCreditTransfer(dayId,orderId,request.resource.data))
+      || (admin() && request.resource.data.get('paymentEventId','')!=resource.data.get('paymentEventId','') && financialEvent(dayId,orderId,request.resource.data))
+      || (((ownOrder() && (activeUser() || (request.resource.data.cancelled==true && request.resource.data.paid==false && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cancelled','paid','receivedAmount','refundedAmount','voidedAmount','creditInAmount','creditOutAmount','surplusChoice','updatedAt'])))) || admin()) && openDay(dayId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dishId','dish','price','quantity','note','paid','cancelled','receivedAmount','refundedAmount','voidedAmount','creditInAmount','creditOutAmount','surplusChoice','updatedAt'])
        && (samePrice(request.resource.data) || menuPrice(dayId,request.resource.data)) && correctPayment(request.resource.data))
      ))
     );

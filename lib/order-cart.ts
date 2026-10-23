@@ -1,3 +1,4 @@
+import {appendActivity,orderAudit} from './activity';
 import {orderFinance,moneyFields,financiallyPaid} from './order-finance';
 import {doc,getDoc,runTransaction,serverTimestamp} from 'firebase/firestore';
 import type {MealClient} from './meal-client';
@@ -18,7 +19,7 @@ export async function placeOrderCart(client:MealClient,dayId:string,rawName:unkn
  const affected=previous.filter(s=>s.exists()&&!s.data()?.paid&&!s.data()?.cancelled&&lines.some(l=>l.dishId===s.data()?.dishId));
  if(affected.some(s=>s.data()?.ownerId!==user.uid)&&!admin)throw new Error('Tên này đã thuộc người khác trong ngày. Vui lòng dùng tên riêng của bạn.');
  for(const old of affected)await clearOrderPaymentLink(client,dayId,old.id);
- await runTransaction(client.db,async tx=>{
+ const orderIds=await runTransaction(client.db,async tx=>{
   const [day,person,...slots]=await Promise.all([tx.get(doc(client.db,'days',dayId)),tx.get(personRef),...Array.from({length:31},(_,i)=>tx.get(doc(client.db,'days',dayId,'orders',personId+(i?'_'+i:''))))]);
   if(!day.exists()||isLocked({id:dayId,...day.data(),menu:[],source:false} as never))throw new Error('Đã chốt cơm. Cần mở lại ngày trước khi thay đổi đơn.');
   const owner=person.data()?.ownerId||slots[0].data()?.ownerId||user.uid;
@@ -38,7 +39,8 @@ export async function placeOrderCart(client:MealClient,dayId:string,rawName:unkn
   // The links were cleared above. Rules still reject this atomic write if a
   // concurrent checkout created a new protected group in the meantime.
   if(!person.exists())tx.set(personRef,{name:slots[0].data()?.name||name,ownerId:owner,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-  for(const {index,line,price} of changes){const old=slots[index].data();tx.set(slots[index].ref,{name:old?.name||name,ownerId:owner,dishId:line.dishId,dish:line.dish,quantity:line.quantity,price,note:line.note,...(old?moneyFields(old as never):{receivedAmount:0,refundedAmount:0,voidedAmount:0}),...(old?.paymentEventId?{paymentEventId:old.paymentEventId}:{}),paid:financiallyPaid({price,quantity:line.quantity,paid:false,...(old?moneyFields(old as never):{})}),cancelled:false,createdAt:old?.createdAt||serverTimestamp(),updatedAt:serverTimestamp()});}
+  for(const {index,line,price} of changes){const old=slots[index].data();tx.set(slots[index].ref,{name:old?.name||name,ownerId:owner,dishId:line.dishId,dish:line.dish,quantity:line.quantity,price,note:line.note,...(old?moneyFields(old as never):{receivedAmount:0,refundedAmount:0,voidedAmount:0}),...(old?.paymentEventId?{paymentEventId:old.paymentEventId}:{}),...(old?.lastCreditTransferId?{lastCreditTransferId:old.lastCreditTransferId}:{}),paid:financiallyPaid({price,quantity:line.quantity,paid:false,...(old?moneyFields(old as never):{})}),cancelled:false,createdAt:old?.createdAt||serverTimestamp(),updatedAt:serverTimestamp()});}
+  appendActivity(tx,client.db,user.uid,{kind:'order.create',summary:'Đặt giỏ nhiều món',dayId,details:{name,changes:changes.map(({index,line,price})=>({orderId:slots[index].id,before:orderAudit(slots[index].data()),after:{dish:line.dish,quantity:line.quantity,price,note:line.note}}))}});return changes.map(c=>slots[c.index].id);
  });
- return name;
+ return {name,orderIds};
 }

@@ -1,7 +1,9 @@
+import {applyCredit,CreditCoveredError} from './credit-client';
+import {appendActivity} from './activity';
 import {orderFinance} from './order-finance';
 import {initializeApp,deleteApp} from 'firebase/app';
 import {getAuth,setPersistence,inMemoryPersistence,signInAnonymously,connectAuthEmulator,deleteUser} from 'firebase/auth';
-import {collection,doc,getDocs,runTransaction,serverTimestamp,Timestamp,updateDoc} from 'firebase/firestore';
+import {collection,doc,getDoc,getDocs,runTransaction,serverTimestamp,Timestamp,updateDoc} from 'firebase/firestore';
 import type {MealClient} from './meal-client';
 import {ensureUser} from './firebase-client';
 import {isBankAccount,normalizeBankAccount,newPaymentReference,paymentDescription,type BankAccount,type PaymentIntent} from './payment-model';
@@ -10,14 +12,15 @@ import {validOrderId} from './meal-client-model';
 import {invalidateLinkedGroup} from './payment-group-client';
 
 export async function saveBankAccount(client:MealClient,value:BankAccount){
- if(!await client.isAdmin())throw new Error('Chỉ quản trị viên được đổi tài khoản nhận tiền.');
+ const user=await ensureUser(client.auth);if(!await client.isAdmin())throw new Error('Chỉ quản trị viên được đổi tài khoản nhận tiền.');
  const account=normalizeBankAccount(value);
- await runTransaction(client.db,async tx=>{await tx.get(doc(client.db,'settings','payment'));tx.set(doc(client.db,'settings','payment'),{...account,updatedAt:serverTimestamp()});});
+ await runTransaction(client.db,async tx=>{await tx.get(doc(client.db,'settings','payment'));tx.set(doc(client.db,'settings','payment'),{...account,updatedAt:serverTimestamp()});appendActivity(tx,client.db,user.uid,{kind:'payment.settings',summary:'Đổi tài khoản nhận tiền',details:{bankName:account.bankName,accountLast4:account.accountNumber.slice(-4)}});});
  return account;
 }
 export async function requestPayment(client:MealClient,dayId:string,orderId:string):Promise<PaymentIntent>{
  const user=await ensureUser(client.auth),admin=await client.isAdmin();
  if(!/^[A-Za-z0-9_-]{1,100}$/.test(dayId)||!validOrderId(orderId))throw new Error('Đơn thanh toán chưa hợp lệ.');
+ await applyCredit(client,[{dayId,orderId}]);const current=await getDoc(doc(client.db,'days',dayId,'orders',orderId));if(current.data()?.paid)throw new CreditCoveredError();
  const orderRef=doc(client.db,'days',dayId,'orders',orderId),settingsRef=doc(client.db,'settings','payment'),linkRef=doc(client.db,'paymentLinks',dayId,'orders',orderId);
  return runTransaction(client.db,async tx=>{
   const [orderSnapshot,settings,link]=await Promise.all([tx.get(orderRef),tx.get(settingsRef),tx.get(linkRef)]);
@@ -39,7 +42,7 @@ export async function requestPayment(client:MealClient,dayId:string,orderId:stri
   const reference=newPaymentReference(),description=paymentDescription(reference),expiresAt=Timestamp.fromMillis(Date.now()+23*3600000);
   const invalidate=await invalidateLinkedGroup(client,tx,dayId,orderId);invalidate();
   const value={bankBin:account.bankBin,bankName:account.bankName,accountNumber:account.accountNumber,accountName:account.accountName,reference,dayId,orderId,ownerId:order.ownerId,requestedBy:user.uid,name:order.name,amount,dishId:order.dishId,price:order.price,quantity:order.quantity,description,orderCreatedAt:order.createdAt,bankConfigUpdatedAt:bankVersion,createdAt:serverTimestamp(),expiresAt};
-  tx.set(doc(client.db,'paymentIntents',reference),value);tx.set(linkRef,{reference,updatedAt:serverTimestamp()});
+  tx.set(doc(client.db,'paymentIntents',reference),value);tx.set(linkRef,{reference,updatedAt:serverTimestamp()});appendActivity(tx,client.db,user.uid,{kind:'payment.qr',summary:'Tạo QR thanh toán',dayId,orderId,reference,details:{name:order.name,amount,dish:order.dish,quantity:order.quantity}});
   return {...value,expiresAt:expiresAt.toDate().toISOString()};
  });
 }

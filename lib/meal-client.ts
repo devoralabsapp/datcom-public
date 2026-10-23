@@ -1,3 +1,5 @@
+import {applyCredit,chooseSurplus,creditBalances} from './credit-client';
+import {appendActivity,orderAudit} from './activity';
 import {orderFinance,moneyFields,financiallyPaid} from './order-finance';
 import type {Auth} from 'firebase/auth';
 import {collection,doc,getDoc,getDocs,query,where,orderBy,limit,runTransaction,writeBatch,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
@@ -23,10 +25,10 @@ export class MealClient{
     const data=day.data();if(!validDate(data.date))throw new Error('Có ngày đặt cơm chưa hợp lệ. Vui lòng kiểm tra lại.');
     const ref=collection(this.db,'days',day.id,'orders');
     const orders=await getDocs(ref);
-    return orders.docs.filter(o=>!o.data().cancelled||orderFinance(o.data() as never).receivedAmount>0).map(o=>{
+    return orders.docs.filter(o=>!o.data().cancelled||(orderFinance(o.data() as never).receivedAmount>0||orderFinance(o.data() as never).creditInAmount>0)).map(o=>{
      const value=o.data(),finance=orderFinance(value as never),amount=finance.total;
      if(!Number.isSafeInteger(amount)||amount<0||typeof value.paid!=='boolean')throw new Error('Có đơn chưa đủ thông tin số tiền hoặc thanh toán.');
-     return {id:'web:'+day.id+':'+o.id,orderId:o.id,ownerId:value.ownerId,dayId:day.id,date:data.date,session:mealSession(data.label||''),name:value.name,dish:value.dish,quantity:value.quantity,amount,receivedAmount:finance.receivedAmount,refundedAmount:finance.refundedAmount,voidedAmount:finance.voidedAmount,refundDue:finance.refundDue,appliedAmount:finance.applied,cancelled:value.cancelled,paid:value.paid,source:'web' as const};
+     return {id:'web:'+day.id+':'+o.id,orderId:o.id,ownerId:value.ownerId,dayId:day.id,date:data.date,session:mealSession(data.label||''),name:value.name,dish:value.dish,quantity:value.quantity,amount,receivedAmount:finance.receivedAmount,refundedAmount:finance.refundedAmount,voidedAmount:finance.voidedAmount,creditAvailable:finance.creditAvailable,creditInAmount:finance.creditInAmount,creditOutAmount:finance.creditOutAmount,surplusChoice:finance.surplusChoice,refundDue:finance.refundDue,appliedAmount:finance.applied,cancelled:value.cancelled,paid:value.paid,source:'web' as const};
     });
    }));
    for(const group of groups)records.push(...group);
@@ -36,7 +38,7 @@ export class MealClient{
  }
  async read(dayId?:string){
   const user=await ensureUser(this.auth);
-  const [admin,daysSnapshot,payment,blocked]=await Promise.all([this.isAdmin(),getDocs(query(collection(this.db,'days'),orderBy('date','desc'),limit(366))),getDoc(doc(this.db,'settings','payment')),ownAccess(this)]);
+  const [admin,daysSnapshot,payment,blocked,credits]=await Promise.all([this.isAdmin(),getDocs(query(collection(this.db,'days'),orderBy('date','desc'),limit(366))),getDoc(doc(this.db,'settings','payment')),ownAccess(this),creditBalances(this)]);
   const days=new Map(this.source.days.map(d=>[d.id,d]));
   for(const d of daysSnapshot.docs){const data=d.data();days.set(d.id,{id:d.id,date:data.date,label:data.label,menu:[],menuCount:data.menuCount,source:false,status:data.status});}
   const now=new Date(),list=mealDays([...days.values()],now);
@@ -51,14 +53,16 @@ export class MealClient{
    const allOrders=orderSnapshot.docs.map(d=>{const o=d.data();return {id:d.id,dayId:day.id,name:o.name,dish:o.dish,price:o.price,quantity:o.quantity,note:o.note,paid:o.paid,...moneyFields(o as never),cancelled:o.cancelled,actor:o.ownerId,updatedAt:o.updatedAt?.toDate().toISOString()||'',canEdit:admin||o.ownerId===user.uid};});orders=allOrders.filter(o=>!o.cancelled);cancelledOrders=allOrders.filter(o=>o.cancelled);
   }
   const qr=payment.data()?.qrUrl;
-  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,cancelledOrders,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
+  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,cancelledOrders,creditBalances:credits,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
  }
  async write(body:Record<string,unknown>){
   const user=await ensureUser(this.auth),admin=await this.isAdmin();
   if(body.action==='order'&&await ownAccess(this))throw new Error('Tài khoản này đang tạm khóa đặt cơm. Vui lòng liên hệ quản trị viên.');
   const id=body.action==='day'&&body.create?`day-${String(body.date)}`:String(body.dayId||'');
   if(!/^[\w-]{1,100}$/.test(id))throw new Error('Không tìm thấy ngày đặt cơm.');
-  if(body.action==='order'&&body.items){const saved=await placeOrderCart(this,id,body.name,body.items);rememberOrderName(saved);await syncUserProfile(this,saved).catch(()=>{});return this.read(id);}
+  if(body.action==='surplus'){if(body.choice!=='refund'&&body.choice!=='carry')throw new Error('Lựa chọn tiền thừa chưa hợp lệ.');await chooseSurplus(this,{dayId:id,orderId:String(body.id)},body.choice);return this.read(id);}
+  if(body.action==='credit'){await applyCredit(this,[{dayId:id,orderId:String(body.id)}]);return this.read(id);}
+  if(body.action==='order'&&body.items){const saved=await placeOrderCart(this,id,body.name,body.items);rememberOrderName(saved.name);await syncUserProfile(this,saved.name).catch(()=>{});let creditNotice='';try{await applyCredit(this,saved.orderIds.map(orderId=>({dayId:id,orderId})));}catch{creditNotice='Đơn đã lưu. Số dư chưa được trừ; sẽ thử lại khi thanh toán.';}return {...await this.read(id),creditNotice};}
   if(body.action==='day'){
    if(!admin)throw new Error('Chỉ người quản lý được sửa thực đơn.');
    const current=await getDoc(doc(this.db,'days',id)),fallback=this.source.days.find(d=>d.id===id);
@@ -70,7 +74,7 @@ export class MealClient{
    const batch=writeBatch(this.db);batch.set(doc(this.db,'days',id),{date,label:current.data()?.label||fallback?.label||`${Number(date.slice(8))}/${Number(date.slice(5,7))}`,status,menuCount:menu.length,cutoffAt:Timestamp.fromDate(new Date(date+'T09:30:00+07:00')),updatedAt:serverTimestamp()});
    for(const d of old)if(!active.has(d.id))batch.update(d.ref,{active:false,updatedAt:serverTimestamp()});
    for(const d of dishes)batch.set(doc(this.db,'days',id,'dishes',d.id),{name:d.name,price:d.price,active:true,updatedAt:serverTimestamp()});
-   await batch.commit();return this.read(id);
+   appendActivity(batch,this.db,user.uid,{kind:'menu.save',summary:body.create?'Tạo thực đơn':'Sửa thực đơn hoặc giờ chốt',dayId:id,details:{date,status,menu}});await batch.commit();return this.read(id);
   }
   const name=cleanName(body.name),orderId=String(body.id||await nameId(name)),orderRef=doc(this.db,'days',id,'orders',orderId);
   let savedName:string|undefined;
@@ -85,15 +89,15 @@ export class MealClient{
     const kind=body.action==='refund'?'refund':body.paid===true?'receive':'void';
     if(kind==='refund'){if(f.refundDue<=0||Number(body.amount)!==f.refundDue)throw new Error('Khoản cần hoàn vừa thay đổi. Vui lòng tải lại.');fields.refundedAmount+=f.refundDue;}
     else if(kind==='receive'){if(old!.cancelled||f.due<=0)throw new Error('Đơn không còn khoản cần thu.');fields.receivedAmount+=f.due;}
-    else {if(old!.cancelled||f.held<=0)throw new Error('Đơn chưa có khoản xác nhận để bỏ.');fields.voidedAmount+=f.held;}
+    else {if(f.creditInAmount>0)throw new Error('Đơn đã dùng số dư; hãy sửa hoặc hủy để đối soát.');if(old!.cancelled||f.held<=0)throw new Error('Đơn chưa có khoản xác nhận để bỏ.');fields.voidedAmount+=f.held;}
     const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();
     const paid=financiallyPaid({...old,...fields} as never);
     tx.set(doc(this.db,'days',id,'orders',orderId,'financialEvents',eventId),{kind,createdBy:user.uid,createdAt:serverTimestamp(),beforeReceived:f.receivedAmount,beforeRefunded:f.refundedAmount,beforeVoided:f.voidedAmount,afterReceived:fields.receivedAmount,afterRefunded:fields.refundedAmount,afterVoided:fields.voidedAmount});
-    tx.update(orderRef,{...fields,paid,paymentEventId:eventId,updatedAt:serverTimestamp()});return;
+    tx.update(orderRef,{...fields,paid,paymentEventId:eventId,updatedAt:serverTimestamp()});appendActivity(tx,this.db,user.uid,{kind:kind==='refund'?'payment.refund':kind==='receive'?'payment.receive':'payment.void',summary:kind==='refund'?'Xác nhận hoàn tiền':kind==='receive'?'Xác nhận thu tiền':'Bỏ xác nhận thanh toán',dayId:id,orderId,details:{eventId,before:orderAudit(old),after:orderAudit({...old,...fields,paid})}});return;
    }
    if(isLocked({id,date:config.date,label:config.label,status:config.status,menu:[],source:false}))throw new Error('Đã chốt cơm. Cần mở lại ngày trước khi thay đổi đơn.');
    if(body.action==='cancel'){
-    if(!existing.exists())throw new Error('Không tìm thấy đơn cơm.');const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();tx.update(orderRef,{...moneyFields(old as never),cancelled:true,paid:false,updatedAt:serverTimestamp()});return;
+    if(!existing.exists())throw new Error('Không tìm thấy đơn cơm.');const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();tx.update(orderRef,{...moneyFields(old as never),cancelled:true,paid:false,updatedAt:serverTimestamp()});appendActivity(tx,this.db,user.uid,{kind:'order.cancel',summary:'Hủy món',dayId:id,orderId,details:{before:orderAudit(old),after:orderAudit({...old,cancelled:true,paid:false,...moneyFields(old as never)})}});return;
    }
    if(body.action!=='order')throw new Error('Thao tác không hợp lệ.');
    const dishName=cleanName(body.dish),dishId=await nameId(dishName),dish=await tx.get(doc(this.db,'days',id,'dishes',dishId));
@@ -102,11 +106,11 @@ export class MealClient{
    const price=old?.dishId===dishId?old.price:dish.data().price;
    const finance=old?moneyFields(old as never):{receivedAmount:0,refundedAmount:0,voidedAmount:0},paid=financiallyPaid({price,quantity,paid:false,...finance});
    if(existing.exists()){const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();}
-   tx.set(orderRef,{name:old?.name||name,dish:dish.data().name,dishId,price,quantity,note,paid,...finance,...(old?.paymentEventId?{paymentEventId:old.paymentEventId}:{}),cancelled:false,ownerId:old?.ownerId||user.uid,createdAt:old?.createdAt||serverTimestamp(),updatedAt:serverTimestamp()});
-   return !old||old.ownerId===user.uid?old?.name||name:undefined;
+   tx.set(orderRef,{name:old?.name||name,dish:dish.data().name,dishId,price,quantity,note,paid,...finance,...(old?.paymentEventId?{paymentEventId:old.paymentEventId}:{}),...(old?.lastCreditTransferId?{lastCreditTransferId:old.lastCreditTransferId}:{}),cancelled:false,ownerId:old?.ownerId||user.uid,createdAt:old?.createdAt||serverTimestamp(),updatedAt:serverTimestamp()});
+   appendActivity(tx,this.db,user.uid,{kind:old?'order.update':'order.create',summary:old?'Sửa món':'Đặt món',dayId:id,orderId,details:{before:orderAudit(old),after:orderAudit({name:old?.name||name,ownerId:old?.ownerId||user.uid,dish:dish.data().name,price,quantity,note,paid,cancelled:false,...finance})}});return !old||old.ownerId===user.uid?old?.name||name:undefined;
   });}catch(error){if((error as {code?:string}).code==='permission-denied'&&!body.id&&body.action==='order')throw new Error('Tên này đã có đơn trong ngày, hoặc chưa được cấp quyền đặt cơm. Hãy sửa đơn cũ hoặc liên hệ người gom cơm.');throw error;}
   if(savedName){rememberOrderName(savedName);await syncUserProfile(this,savedName).catch(()=>{});}
-  return this.read(id);
+  let creditNotice='';if(body.action==='order'){try{await applyCredit(this,[{dayId:id,orderId}]);}catch{creditNotice='Đơn đã lưu. Số dư chưa được trừ; sẽ thử lại khi thanh toán.';}}return {...await this.read(id),creditNotice};
  }
 }
 let instance:MealClient|undefined;

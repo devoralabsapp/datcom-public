@@ -10,7 +10,7 @@ An unpaid order shows **Payment** in every lunch-list filter where it appears. I
 
 ### Money after an edit or cancellation
 
-The order keeps cumulative `receivedAmount`, `refundedAmount`, and `voidedAmount`. Current money held is received minus refunded minus reversed confirmations. The amount still due and any refund are calculated per order, without offsetting other orders.
+The order keeps cumulative `receivedAmount`, `refundedAmount`, `voidedAmount`, `creditInAmount`, and `creditOutAmount`. Current money held is received plus credit in minus credit out minus refunded minus reversed confirmations. The amount still due and any refund are calculated per order. Refund is the default; the owner can instead keep surplus for later orders. See [carryover credit and activity history](credit-and-activity.md) for owner-bound offsets and immutable transfers.
 
 | Change after receiving 50,000 VND | Result |
 | --- | --- |
@@ -43,7 +43,7 @@ Publish the complete updated `firestore.rules` **before** deploying the new UI. 
 
 - Chọn nhiều món trong giỏ, chỉnh số suất riêng cho từng món rồi đặt cùng lúc. Mỗi lượt tối đa 10 món khác nhau, mỗi dòng 1–30 suất. Có thể thêm lượt đặt khác trong ngày; phần đã trả được giữ riêng.
 - Nút **Thanh toán** xuất hiện cho đơn chưa trả của mình ở mọi bộ lọc danh sách; quản trị có thể làm hộ. Ở Thống kê, chọn Hôm nay / Tuần này / Tháng này / Tất cả để tạo một QR cho các khoản của mình trong kỳ. Chỉ lấy đơn trên web.
-- Đã nhận 50.000đ rồi sửa lên 60.000đ thì chỉ thu thêm 10.000đ. Sửa xuống 40.000đ thì ghi cần hoàn 10.000đ. Hủy đơn thì ghi cần hoàn số còn giữ. Tiền cần hoàn không tự trừ vào đơn khác.
+- Đã nhận 50.000đ rồi sửa lên 60.000đ thì chỉ thu thêm 10.000đ. Sửa xuống 40.000đ thì ghi cần hoàn 10.000đ. Hủy đơn thì ghi cần hoàn số còn giữ. Tiền chọn Hoàn lại không tự trừ vào đơn khác. Chọn Để hôm sau để dùng làm số dư cho lần đặt/thanh toán tiếp theo.
 - Quản trị bấm **Xác nhận đã hoàn** sau khi hoàn tiền thực tế. Ứng dụng ghi số đã hoàn và giữ lịch sử, không tự chuyển tiền ngân hàng. **Bỏ xác nhận** dùng để sửa việc xác nhận nhầm, không phải hoàn tiền. Đơn đã hủy vẫn có thể xem ở tab **Đã hủy** và **Cần hoàn**.
 - Đơn cũ còn tích đã trả được giữ số tiền theo đơn giá và số lượng đang lưu. Nếu phiên bản cũ đã bỏ tích và mất số tiền trước đó, cần đối chiếu biên nhận/giao dịch để ghi nhận lại thủ công.
 - **Tổng hợp & thanh toán** có Xuất PDF, Xuất JPG và tạo link gửi nhà hàng. JPG nhiều trang tải thành ZIP. Chỉ quản trị tạo/thu hồi link; link dùng 7 ngày, không cần đăng nhập. Chỉ chia sẻ món, số lượng, ghi chú, giá và tổng tiền. Tránh ghi thông tin cá nhân vào ghi chú vì nhà hàng sẽ nhìn thấy.

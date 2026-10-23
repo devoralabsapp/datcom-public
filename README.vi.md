@@ -84,3 +84,7 @@ Mã nguồn ứng dụng được phát hành theo [giấy phép MIT](LICENSE). 
 ## Đặt nhiều món, thanh toán chênh lệch và gửi nhà hàng
 
 Xem [hướng dẫn nhiều món, thanh toán gộp, hoàn tiền và chia sẻ](docs/orders-payments-sharing.md). Phần Tổng hợp & thanh toán xuất PDF/JPG thay CSV, quản trị tạo link gửi nhà hàng dùng 7 ngày. Đơn đã trả giữ tiền khi sửa/hủy; chỉ thu phần thiếu hoặc ghi cần hoàn, quản trị xác nhận sau khi hoàn thực tế. Publish toàn bộ Rules mới trước khi triển khai.
+
+## Số dư dùng lần sau và nhật ký hoạt động
+
+Người đặt chọn Hoàn lại hoặc Để hôm sau khi có tiền thừa. Số dư gắn theo tài khoản/phiên khách, tự trừ khi đặt hoặc thanh toán; thống kê hiện Số dư trừ riêng. Quản trị xem Nhật ký hoạt động trong menu. Xem [hướng dẫn số dư và nhật ký](docs/credit-and-activity.md) để biết cách đối soát, phạm vi log và những trường hợp không tự ghi nhận.

@@ -1,3 +1,4 @@
+import {appendActivity,recordActivity,orderAudit} from './activity';
 import {GoogleAuthProvider,linkWithPopup,signInWithCredential,signOut,setPersistence,inMemoryPersistence,getAuth,connectAuthEmulator,type AuthError} from 'firebase/auth';
 import {deleteApp,initializeApp} from 'firebase/app';
 import {collection,doc,getDoc,getDocs,query,where,setDoc,deleteDoc,runTransaction,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
@@ -10,7 +11,7 @@ export async function moveGuestOrders(db:Firestore,sourceUid:string,targetUid:st
  const days=await getDocs(collection(db,'days'));
  for(let i=0;i<days.docs.length;i+=8){await Promise.all(days.docs.slice(i,i+8).map(async day=>{
   const orders=await getDocs(query(collection(db,'days',day.id,'orders'),where('ownerId','==',sourceUid)));
-  for(const order of orders.docs)await runTransaction(db,async tx=>{const current=await tx.get(order.ref);if(current.data()?.ownerId!==sourceUid)return;const apply=await invalidateLinkedGroup({db} as MealClient,tx,day.id,order.id);apply();tx.update(order.ref,{ownerId:targetUid,updatedAt:serverTimestamp()});});
+  for(const order of orders.docs)await runTransaction(db,async tx=>{const current=await tx.get(order.ref);if(current.data()?.ownerId!==sourceUid)return;const sourceRef=doc(db,'creditSources',day.id+'~'+order.id),credit=await tx.get(sourceRef);const apply=await invalidateLinkedGroup({db} as MealClient,tx,day.id,order.id);apply();tx.update(order.ref,{ownerId:targetUid,updatedAt:serverTimestamp()});if(credit.exists())tx.update(sourceRef,{ownerId:targetUid,updatedAt:serverTimestamp()});appendActivity(tx,db,targetUid,{kind:'order.transfer',summary:'Chuyển đơn khách sang Google',dayId:day.id,orderId:order.id,details:{before:orderAudit(current.data()),targetUid}});});
   const people=await getDocs(query(collection(db,'days',day.id,'orderPeople'),where('ownerId','==',sourceUid)));
   for(const person of people.docs)await runTransaction(db,async tx=>{const current=await tx.get(person.ref);if(current.data()?.ownerId===sourceUid)tx.update(person.ref,{ownerId:targetUid,updatedAt:serverTimestamp()});});
  }));}
@@ -31,7 +32,7 @@ export async function resumeGuestTransfer(){
 export async function googleSignIn(){
  const {auth,db}=firebaseClient(),guest=await ensureUser(auth),provider=new GoogleAuthProvider();
  if(!guest.isAnonymous)return;
- try{await linkWithPopup(guest,provider);return;}catch(error){
+ try{await linkWithPopup(guest,provider);await recordActivity({auth,db} as MealClient,{kind:'auth.signin',summary:'Đăng nhập Google',details:{linkedGuest:true}}).catch(()=>{});return;}catch(error){
   if((error as AuthError).code!=='auth/credential-already-in-use')throw error;
   const credential=GoogleAuthProvider.credentialFromError(error as AuthError);if(!credential)throw error;
   // Keep the anonymous session until Google identifies the existing account.
@@ -42,8 +43,8 @@ export async function googleSignIn(){
    await setDoc(doc(db,'accountLinks',guest.uid),{targetUid:target.user.uid,createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+5*60000)});
    localStorage.setItem(pendingKey,guest.uid);
    await signInWithCredential(auth,credential);
-   await resumeGuestTransfer();
+   await resumeGuestTransfer();await recordActivity({auth,db} as MealClient,{kind:'auth.signin',summary:'Đăng nhập Google',details:{linkedGuest:true}}).catch(()=>{});
   }finally{await deleteApp(secondary);}
  }
 }
-export async function googleSignOut(){await signOut(firebaseClient().auth);}
+export async function googleSignOut(){const client=firebaseClient();await recordActivity(client as MealClient,{kind:'auth.signout',summary:'Đăng xuất'}).catch(()=>{});await signOut(client.auth);}
