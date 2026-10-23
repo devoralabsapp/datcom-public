@@ -300,5 +300,29 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    await setDoc(doc(transferring.db,'accountLinks',from),{targetUid:to,createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+300000)});await moveGuestOrders(target.db,from,to);
    const transferredIntent=await requestPayment(target,payDay,transferOrder.id);assert.notEqual(transferredIntent.reference,oldIntent.reference);assert.equal(transferredIntent.ownerId,to);assert.equal(transferredIntent.amount,40000);
   });
+  await t.test('Techcombank raw notices settle exact references once without bank time or transaction ID',async()=>{
+   const payDay='day-2099-02-02',bank={bankBin:'970407',bankName:'Techcombank',accountNumber:'00012345678901',accountName:'NGUYEN VAN MAU'};
+   await admin.write({action:'day',create:true,date:'2099-02-02',menu,status:'open'});await saveBankAccount(admin,bank);
+   const payer=await client('tcb-payer'),bot=await client('tcb-bot');
+   const rootDb=environment.authenticatedContext(PRIMARY_ADMIN_UID,{email:'primary@example.test',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore() as unknown as Firestore;
+   await setDoc(doc(rootDb,'paymentIntegrations',bot.auth.currentUser!.uid),{enabled:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+   const placed=await payer.write({action:'order',dayId:payDay,name:'Khách TCB mẫu',dish:menu[0].name}),own=placed.orders.find(o=>o.actor===payer.auth.currentUser!.uid)!,intent=await requestPayment(payer,payDay,own.id);
+   const orderRef=doc(payer.db,'days',payDay,'orders',own.id),secret='t'.repeat(64);
+   const env={NODE_ENV:'test',NEXT_PUBLIC_FIREBASE_PROJECT_ID:project,NEXT_PUBLIC_FIREBASE_API_KEY:'fake-api-key',PAYMENT_WEBHOOK_SECRET:secret,PAYMENT_FIREBASE_REFRESH_TOKEN:bot.auth.currentUser!.refreshToken,FIRESTORE_EMULATOR_HOST:process.env.FIRESTORE_EMULATOR_HOST,FIREBASE_AUTH_EMULATOR_HOST:process.env.FIREBASE_AUTH_EMULATOR_HOST};
+   const raw=(code=intent.reference,amount=40000,account=bank.accountNumber)=>`Account ${account}\nAmount: + ${amount.toLocaleString('en-US')}\nBalance: 39,184\nNGUYEN VAN MAU transfer ${code}`;
+   async function notify(text:string){const response=await bankWebhook(new Request('https://example.test/api/payments/bank-notification',{method:'POST',headers:{Authorization:'Bearer '+secret,'Content-Type':'text/plain'},body:text}),env);return {httpStatus:response.status,...await response.json()};}
+   assert.equal((await notify(raw(''))).httpStatus,422);
+   assert.equal((await notify(raw(intent.reference,30000))).reason,'amount_mismatch');
+   assert.equal((await notify(raw(intent.reference,40000,'00011111111111'))).reason,'account_mismatch');
+   assert.equal((await notify(raw().replace('+ 40,000','- 40,000'))).httpStatus,422);
+   assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   const before=Date.now(),outcomes=await Promise.all([notify(raw()),notify(raw().replace(/\n/g,' '))]);
+   assert.deepEqual(outcomes.map(o=>o.status).sort(),['duplicate','paid']);assert.equal((await getDoc(orderRef)).data()?.paid,true);
+   const receipt=(await getDoc(doc(admin.db,'paymentReceipts',intent.reference))).data()!;
+   assert.equal(receipt.amount,40000);assert.equal(receipt.bankBin,'970407');assert.match(receipt.transactionId,/^TCBNOTICE-[a-f0-9]{64}$/);assert.ok(receipt.occurredAt.toMillis()>=before&&receipt.occurredAt.toMillis()<=Date.now());assert.equal(receipt.notification,undefined);assert.equal(receipt.balance,undefined);
+   await admin.write({action:'paid',dayId:payDay,id:own.id,paid:false});assert.equal((await notify(raw().toLowerCase())).status,'duplicate');assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   const renewed=await requestPayment(payer,payDay,own.id);
+   await environment.withSecurityRulesDisabled(async c=>updateDoc(doc(c.firestore() as unknown as Firestore,'paymentIntents',renewed.reference),{expiresAt:Timestamp.fromMillis(Date.now()-1000)}));assert.equal((await notify(raw(renewed.reference))).reason,'qr_expired');assert.equal((await getDoc(orderRef)).data()?.paid,false);
+  });
  }finally{const coverage=await fetch(`http://${host}:${port}/emulator/v1/projects/${project}:ruleCoverage`);fs.mkdirSync('.firebase',{recursive:true});fs.writeFileSync('.firebase/rules-coverage.json',await coverage.text());await Promise.all(databases.map(db=>terminate(db)));await Promise.all(apps.map(app=>deleteApp(app)));await environment.cleanup();}
 });

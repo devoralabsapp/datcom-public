@@ -1,4 +1,4 @@
-# QR theo đơn và nhận thông báo BIDV qua Shortcut
+# QR theo đơn và nhận thông báo BIDV / Techcombank qua Shortcut
 
 ## Tài khoản nhận tiền và QR
 
@@ -13,7 +13,7 @@ Mỗi mã dùng cho một đơn chưa trả, có hiệu lực tối đa 23 giờ
 ## Bật API không cần OIDC/service account
 
 1. Publish **toàn bộ `firestore.rules` mới nhất** vào đúng database. Các quyền đơn, hồ sơ và vai trò cũ được giữ; quyền mới gồm `paymentIntents`, `paymentLinks`, `paymentIntegrations`, `paymentReceipts`, `paymentTransactions`.
-2. Đăng nhập Google bằng quản trị chính, mở **Thông tin chuyển khoản → Kết nối Shortcut nhận tiền BIDV → Tạo kết nối API**.
+2. Đăng nhập Google bằng quản trị chính, mở **Thông tin chuyển khoản → Kết nối Shortcut nhận tiền → Tạo kết nối API**.
 3. Website tạo một danh tính Firebase ẩn danh riêng cho API, cấp quyền thanh toán giới hạn trong Rules và hiển thị hai giá trị một lần trong cửa sổ này:
 
    ```text
@@ -26,7 +26,7 @@ Mỗi mã dùng cho một đơn chưa trả, có hiệu lực tối đa 23 giờ
 
 Mục **Xem kết nối → Ngắt** thu hồi quyền API ngay cả khi ID token còn thời hạn. Khi đổi kết nối, tạo kết nối mới, thay hai biến, redeploy rồi ngắt kết nối cũ. Nếu tài khoản API bị xóa hoặc token bị thu hồi, tạo lại kết nối thay vì dùng token đăng nhập của người quản trị. Nếu bật tự động xóa tài khoản ẩn danh ở cấp Firebase, cần cân nhắc vòng đời danh tính kết nối khi vận hành lâu dài.
 
-API tin vào thông báo do thiết bị/Shortcut quản trị gửi với khóa hợp lệ; đây không phải webhook có chữ ký trực tiếp từ BIDV. Người giữ khóa có thể gửi thông báo giả. Chỉ cấu hình trên thiết bị quản trị và giữ riêng khóa. Rules giới hạn danh tính này vào việc xác nhận đúng mã/số tiền/tài khoản của đơn đã có; không được sửa thực đơn, vai trò, đảo trạng thái đã trả hoặc xóa lịch sử.
+API tin vào thông báo do thiết bị/Shortcut quản trị gửi với khóa hợp lệ; đây không phải webhook có chữ ký trực tiếp từ ngân hàng. Người giữ khóa có thể gửi thông báo giả. Chỉ cấu hình trên thiết bị quản trị và giữ riêng khóa. Rules giới hạn danh tính này vào việc xác nhận đúng mã/số tiền/tài khoản của đơn đã có; không được sửa thực đơn, vai trò, đảo trạng thái đã trả hoặc xóa lịch sử.
 
 ## API cho Shortcut
 
@@ -61,9 +61,28 @@ Trong Shortcut, thao tác gửi URL cần chọn **POST**, thêm header xác th�
 | `Transaction Code` / `Mã giao dịch` | Mã giao dịch ổn định để chống gửi lại |
 | `Ending Balance` | Bỏ qua, không dùng làm số tiền thanh toán |
 
-Có thể giữ nhiều dòng hoặc gom thành một dòng; bộ đọc khôi phục ranh giới ở các nhãn đã biết. Trường bắt buộc bị trùng, thiếu, che số tài khoản, số tiền âm, USD, ngày sai hoặc có nhiều mã khác nhau đều bị từ chối. Parser hiện được xác nhận cho **BIDV (BIN 970418)** và các tên nhãn tương đương ở trên. QR hỗ trợ các ngân hàng trong danh sách, nhưng thông báo ngân hàng khác cần bổ sung bộ đọc riêng từ mẫu trước khi bật tự đối chiếu.
+Có thể giữ nhiều dòng hoặc gom thành một dòng; bộ đọc khôi phục ranh giới ở các nhãn đã biết. Trường bắt buộc bị trùng, thiếu, che số tài khoản, số tiền âm, USD, ngày sai hoặc có nhiều mã khác nhau đều bị từ chối. Bộ đọc BIDV dùng **BIN 970418** và các tên nhãn tương đương ở trên.
 
 Thời điểm giao dịch phải từ lúc tạo mã (cho phép lệch/bo tròn 2 phút), không quá 5 phút trong tương lai và không sau thời hạn mã. Giao dịch gửi trễ sau khi mã hết hạn cần người quản trị xác nhận thủ công.
+
+### Techcombank: mẫu thông báo ngắn
+
+Chọn **Techcombank (BIN 970407)** trong cài đặt tài khoản nhận tiền. API cũng nhận nguyên văn mẫu sau; tất cả giá trị dưới đây là dữ liệu giả:
+
+```text
+Account 00012345678901
+Amount: + 30,000
+Balance: 39,184
+NGUYEN VAN MAU transfer COM0123456789ABCDEF0123
+```
+
+API đọc tài khoản ở dòng `Account` (không có dấu hai chấm), đọc tiền vào từ `Amount`, và bỏ qua số dư `Balance`. Với mẫu này, tiền là VND; có thể không có chữ VND sau số tiền. Chấp nhận xuống dòng hoặc gom một dòng, dấu phân tách nghìn bằng phẩy/chấm; từ chối số âm, thiếu dấu `+`, ngoại tệ, trường trùng và nội dung trộn định dạng BIDV.
+
+**Thông báo vẫn phải có một mã COM của QR**, số tiền chính xác và tài khoản nhận trùng cấu hình/đơn. Nội dung chỉ có tên người chuyển và chữ `transfer` sẽ trả `422`, không tự tích đã trả. Người chuyển giữ nguyên mã khi quét QR; không suy đoán đơn từ tên hay số tiền.
+
+Mẫu ngắn không có mã giao dịch hoặc thời gian do ngân hàng cung cấp. API tạo `transactionId` dạng `TCBNOTICE-<SHA256>` từ nguyên văn thông báo sau khi chuẩn hóa khoảng trắng/hoa thường, và ghi thời điểm nhận tại máy chủ vào `occurredAt`. Đây là **dấu nhận diện thông báo và thời điểm nhận**, không phải mã/thời gian giao dịch ngân hàng. Không thể xác minh độc lập ngày giao dịch từ mẫu này; Shortcut nên chuyển thông báo ngay khi nhận, không dùng để nạp lịch sử. QR hết hạn, đã thay đổi hoặc đã xử lý vẫn bị chặn. Biên nhận bất biến theo mã COM ngăn gửi lại, kể cả khi quản trị đổi đơn về chưa trả. Không lưu nguyên văn hoặc số dư trong Firestore.
+
+QR hỗ trợ các ngân hàng trong danh sách; tự đối chiếu hiện chỉ hỗ trợ hai mẫu BIDV và Techcombank trên. Thông báo ngân hàng khác cần bổ sung bộ đọc riêng.
 
 ## Phản hồi và chống xác nhận trùng
 
@@ -79,7 +98,7 @@ Thời điểm giao dịch phải từ lúc tạo mã (cho phép lệch/bo tròn
 
 Shortcut có thể bỏ qua `duplicate`, báo cho quản trị với `unmatched`/`422`, và thử lại có giới hạn với `503`. API trả `private, no-store`, không trả lại nguyên văn thông báo hoặc thông tin người đặt.
 
-Sau khi đối chiếu, API ghi atomically ba thay đổi: `paid=true` trên đơn, biên nhận bất biến theo mã QR, và khóa chống trùng theo ngân hàng/tài khoản/mã giao dịch. Có điều kiện phiên bản `updateTime` trên đơn và điều kiện bản ghi chống trùng chưa tồn tại; Rules kiểm tra lại liên kết, tài khoản và giá trị đơn tại thời điểm ghi. Nếu một điều kiện thất bại, không ghi một phần. Hai lần gửi đồng thời vẫn chỉ có một lần thanh toán. Nếu quản trị đổi lại thành chưa trả sau đó, gửi lại thông báo cũ cũng không tích lại.
+Sau khi đối chiếu, API ghi atomically ba thay đổi: `paid=true` trên đơn, biên nhận bất biến theo mã QR, và khóa chống trùng theo ngân hàng/tài khoản/mã giao dịch (hoặc dấu nhận diện thông báo Techcombank). Có điều kiện phiên bản `updateTime` trên đơn và điều kiện bản ghi chống trùng chưa tồn tại; Rules kiểm tra lại liên kết, tài khoản và giá trị đơn tại thời điểm ghi. Nếu một điều kiện thất bại, không ghi một phần. Hai lần gửi đồng thời vẫn chỉ có một lần thanh toán. Nếu quản trị đổi lại thành chưa trả sau đó, gửi lại thông báo cũ cũng không tích lại.
 
 Không lưu nguyên văn thông báo/số dư trong Firestore. Biên nhận giữ số tiền, tài khoản nhận, mã giao dịch, thời gian, người xử lý và hash thông báo để tra cứu; chỉ chính chủ/quản trị/danh tính API đọc theo quyền cần thiết. Giao dịch không khớp không tự ghi vào danh sách thanh toán; lưu phản hồi lỗi trong công cụ quản trị nếu cần theo dõi.
 
