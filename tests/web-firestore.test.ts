@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {initializeApp,deleteApp,type FirebaseApp} from 'firebase/app';
 import {getAuth,connectAuthEmulator,signInAnonymously,signInWithCredential,linkWithCredential,GoogleAuthProvider} from 'firebase/auth';
-import {getFirestore,connectFirestoreEmulator,doc,getDoc,getDocs,collection,query,where,setDoc,updateDoc,deleteDoc,deleteField,writeBatch,serverTimestamp,Timestamp,terminate,setLogLevel,type Firestore} from 'firebase/firestore';
+import {getFirestore,connectFirestoreEmulator,doc,getDoc,getDocs,collection,query,where,orderBy,setDoc,updateDoc,deleteDoc,deleteField,writeBatch,serverTimestamp,Timestamp,terminate,setLogLevel,type Firestore} from 'firebase/firestore';
 import {initializeTestEnvironment,assertFails,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {MealClient} from '../lib/meal-client';
 import type {Auth} from 'firebase/auth';
@@ -430,7 +430,27 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    const stats=(await payer.statistics()).find(o=>o.dayId===dayId&&o.name===name)!;assert.equal(stats.amount,0);assert.equal(stats.refundDue,50000);assert.equal(stats.appliedAmount,0);
    await admin.write({action:'refund',dayId,id,amount:50000});assert.equal((await read()).receivedAmount,70000);assert.equal((await read()).refundedAmount,70000);assert.equal((await read()).refundDue,0);
    const events=await getDocs(collection(payer.db,'days',dayId,'orders',id,'financialEvents'));assert.equal(events.size,3);for(const e of events.docs){await assertFails(updateDoc(e.ref,{kind:'hacked'}));await assertFails(deleteDoc(e.ref));}
+   assert.equal((await getDocs(query(collection(admin.db,'days',dayId,'orders',id,'financialEvents'),orderBy('createdAt','desc')))).size,3);
+   await assertFails(getDocs(collection(other.db,'days',dayId,'orders',id,'financialEvents')));
+   await assertFails(getDoc(doc(other.db,'days',dayId,'orders',id,'financialEvents',events.docs[0].id)));
+   const publicDb=environment.unauthenticatedContext().firestore() as unknown as Firestore;
+   await assertFails(getDocs(collection(publicDb,'days',dayId,'orders',id,'financialEvents')));
+   await assertFails(getDoc(doc(publicDb,'days',dayId,'orders',id,'financialEvents',events.docs[0].id)));
+   assert.equal((await getDocs(query(collection(payer.db,'days',dayId,'orders',id,'financialEvents'),orderBy('createdAt','desc')))).size,3);
+   assert.equal((await getDoc(doc(other.db,'days',dayId,'orders',id))).exists(),true,'Shared order visibility remains available');
    assert.equal((await notify(single.reference,10000)).status,'duplicate');assert.equal((await read()).refundedAmount,70000);
+  });
+  await t.test('one owner can pay all their dish lines even under different order names',async()=>{
+   const payer=await client('own-alias-payer'),other=await client('own-alias-other'),dayId='day-2099-11-02';
+   await admin.write({action:'day',create:true,date:'2099-11-02',menu,status:'open'});
+   await payer.write({action:'order',dayId,name:'Tên buổi sáng',items:[{dish:menu[0].name,quantity:2},{dish:menu[1].name,quantity:1}]});
+   const placed=await payer.write({action:'order',dayId,name:'Tên khác cùng tài khoản',dish:menu[1].name});
+   const own=placed.orders.filter(o=>o.actor===payer.auth.currentUser!.uid),refs=own.map(o=>({dayId,orderId:o.id}));
+   const group=await requestPaymentGroup(payer,refs);assert.equal(group.count,3);assert.equal(group.amount,180000);assert.equal(new Set(group.items.map(i=>i.name)).size,2);
+   const foreign=await other.write({action:'order',dayId,name:'Tên người khác',dish:menu[0].name});
+   const foreignOrder=foreign.orders.find(o=>o.actor===other.auth.currentUser!.uid)!;
+   await assert.rejects(requestPaymentGroup(payer,[...refs,{dayId,orderId:foreignOrder.id}]));
+   assert.equal((await getDoc(doc(other.db,'days',dayId,'orders',foreignOrder.id))).data()?.paid,false);
   });
   await t.test('legacy paid checkboxes become preserved opening balances and cancelled credit slots are not overwritten',async()=>{
    const payer=await client('legacy-balance'),dayId='day-2099-07-01',name='Số dư cũ',id=await nameId(name);
