@@ -751,5 +751,6 @@
   "Cần thanh toán:": "Amount to pay:",
   "Thanh toán các đơn của bạn đang hiển thị trong ngày đã chọn.": "Pay your orders currently shown for the selected day.",
   "Xem {0} đơn chưa thanh toán": "View {0} unpaid orders",
-  "Bạn có {0} đơn cần thanh toán": "You have {0} orders to pay"
+  "Bạn có {0} đơn cần thanh toán": "You have {0} orders to pay",
+  "Thử lại tạo QR": "Retry QR creation"
 }
