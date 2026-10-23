@@ -21,7 +21,7 @@ function redact(text:string,env:Env){
  // Never echo configured credentials, including in a malformed notification.
  for(const key of ['PAYMENT_WEBHOOK_SECRET','PAYMENT_FIREBASE_REFRESH_TOKEN','PAYMENT_TELEGRAM_BOT_TOKEN'])if(env[key])value=value.split(env[key]!).join('[đã che khóa]');
  return value.replace(/(?:Bearer\s+[A-Za-z0-9._~+/-]+=*|\b\d{5,20}:[A-Za-z0-9_-]{20,100}\b)/gi,'[đã che khóa]')
-  .replace(/((?:Ending Balance|Balance|Số dư|So du)\s*:\s*)[+-]?\s*\d[\d,. \t]*(?:VND|VNĐ|₫|đ)?/giu,'$1[đã che số dư]')
+  .replace(/((?:Ending Balance|Balance|Số dư|So du)\s*:\s*)[+-]?[ \t]*(?:(?:VND|VNĐ|USD|₫|đ)[ \t]*)?[+-]?[ \t]*\d[\d,. \t]*(?:VND|VNĐ|USD|₫|đ)?/giu,'$1[đã che số dư]')
   .replace(/((?:Account(?: thanh toán)?|Tài khoản(?: thanh toán)?|Tai khoan(?: thanh toan)?)\s*:?\s*)([A-Za-z0-9*]{1,34})/giu,(_,label:string,account:string)=>label+conceal(account))
   .replace(/\b\d{6,}\b/g,value=>conceal(value))
   .replace(/[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,'');
