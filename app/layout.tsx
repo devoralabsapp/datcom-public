@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import {cookies} from 'next/headers';
+import {I18nProvider} from '../components/i18n-provider';
+import {LOCALE_COOKIE,parseLocale,translate} from '../lib/i18n';
 import "./rice.css";
 import "./interface.css";
 import "./statistics.css";
@@ -6,23 +9,29 @@ import "./pickup.css";
 import "./users.css";
 import "./payment.css";
 
-export const metadata: Metadata = {
-  title: "Cơm Nhà · Đặt cơm văn phòng",
-  description: "Chọn món ngon, đặt cơm cùng đồng nghiệp và theo dõi thanh toán mỗi ngày.",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = parseLocale((await cookies()).get(LOCALE_COOKIE)?.value);
+  return {
+    title: translate(locale, "Cơm Nhà · Đặt cơm văn phòng"),
+    description: translate(locale, "Chọn món ngon, đặt cơm cùng đồng nghiệp và theo dõi thanh toán mỗi ngày."),
+    icons: {
+      icon: "/favicon.svg",
+      shortcut: "/favicon.svg",
+    },
+  };
+}
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = parseLocale((await cookies()).get(LOCALE_COOKIE)?.value);
   return (
-    <html lang="vi">
-      <body className="antialiased">{children}</body>
+    <html lang={locale}>
+      <body className="antialiased">
+        <I18nProvider initialLocale={locale}>{children}</I18nProvider>
+      </body>
     </html>
   );
 }
