@@ -8,6 +8,7 @@ import "./statistics.css";
 import "./pickup.css";
 import "./users.css";
 import "./payment.css";
+import "./features.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = parseLocale((await cookies()).get(LOCALE_COOKIE)?.value);

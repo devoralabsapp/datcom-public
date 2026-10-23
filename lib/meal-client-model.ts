@@ -7,6 +7,7 @@ export function localNow(now=new Date()){
 export function isLocked(day:Day){if(day.status==='closed')return true;if(day.status==='open')return false;const now=localNow();return day.date<now.date||(day.date===now.date&&now.minutes>=570);}
 export function cleanName(value:unknown){return String(value||'').normalize('NFC').trim();}
 export async function nameId(name:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(name.toLowerCase()));return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');}
+export const validOrderId=(id:string)=>/^[a-f0-9]{64}(?:_(?:[1-9]|[12][0-9]|30))?$/.test(id);
 export function validateMenu(value:unknown):MenuItem[]{
  if(!Array.isArray(value)||!value.length||value.length>60)throw new Error('Cần từ 1 đến 60 món.');
  const menu=value.map(m=>({name:cleanName(m?.name),price:Number(m?.price)}));

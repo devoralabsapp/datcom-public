@@ -53,3 +53,7 @@ Logs redact account numbers and balances and show identical Techcombank blocks o
 Anyone holding the webhook secret can submit fabricated text. Use trusted devices and rotate exposed secrets. This is convenient reconciliation, not independent proof from the bank. Reconcile unmatched notifications against bank records and confirm manually; never weaken matching to accept only a name or amount.
 
 To replace an integration, create a new one, update both server secrets, redeploy, then disconnect the old one. Recreate an integration if its account is deleted or refresh token revoked. Consider this account's lifecycle before enabling automatic deletion of anonymous accounts.
+
+## Multiple dishes, partial balances and refunds
+
+See [orders, payment differences and restaurant sharing](orders-payments-sharing.md) for grouped QRs, resumable settlement, preserved paid amounts, administrator-confirmed refunds and expiring restaurant links. QR amounts now represent the remaining balance, which can be lower than the meal total. Publish the full updated Rules before deploying.

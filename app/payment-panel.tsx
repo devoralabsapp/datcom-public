@@ -10,11 +10,16 @@ import {isBankAccount,vietQrPayload,type BankAccount,type PaymentIntent} from '.
 import {createPaymentIntegration,paymentIntegrations,requestPayment,revokePaymentIntegration,saveBankAccount} from '../lib/payment-client';
 import {PRIMARY_ADMIN_UID} from '../lib/user-model';
 import banks from '../data/banks.json';
+import GroupPaymentPanel from './group-payment-panel';
+import type {PaymentTarget} from '../lib/payment-group';
 
 const empty:BankAccount={bankBin:'970418',bankName:'BIDV',accountNumber:'',accountName:''};
 async function copy(value:string){await navigator.clipboard.writeText(value);}
 
-export default function PaymentPanel({workspace:w,client,onChanged}:{workspace:Workspace;client:MealClient;onChanged:()=>void}){
+export default function PaymentPanel(props:{workspace:Workspace;client:MealClient;onChanged:()=>void;target?:PaymentTarget|null}){
+ return props.target?<GroupPaymentPanel client={props.client} target={props.target} onChanged={props.onChanged}/>:<SinglePaymentPanel {...props}/>;
+}
+function SinglePaymentPanel({workspace:w,client,onChanged}:{workspace:Workspace;client:MealClient;onChanged:()=>void}){
  const {t,money,intlLocale}=useI18n();
  const orders=w.orders.filter(o=>!o.cancelled&&!o.paid&&(w.admin||o.actor===w.userId));
  const [orderId,setOrderId]=useState(()=>orders.find(o=>o.actor===w.userId)?.id||orders[0]?.id||'');
@@ -49,7 +54,7 @@ export default function PaymentPanel({workspace:w,client,onChanged}:{workspace:W
   {error?<div className="error-banner" role="alert">{t(error)}</div>:null}{message?<p className="bank-success" role="status">{t(message)}</p>:null}
   {bank?<>
    <dl className="bank-payee"><div><dt>{t("Ngân hàng")}</dt><dd>{bank.bankName}</dd></div><div><dt>{t("Số tài khoản")}</dt><dd><strong>{bank.accountNumber}</strong><button className="icon-btn" aria-label={t("Sao chép số tài khoản")} onClick={()=>copy(bank.accountNumber).then(()=>setMessage('Đã sao chép số tài khoản.')).catch(()=>setError('Chưa sao chép được.'))}><Copy size={15}/></button></dd></div><div><dt>{t("Người nhận")}</dt><dd>{bank.accountName}</dd></div></dl>
-   {!paid&&orders.length?<><label htmlFor="payment-order">{t("Chọn đơn cần thanh toán")}</label><select id="payment-order" value={orderId} onChange={e=>setOrderId(e.target.value)}>{orders.map(order=><option key={order.id} value={order.id}>{order.name} · {money(order.price*order.quantity)}</option>)}</select></>:!paid?<p className="payment-warning">{t("Bạn chưa có đơn cần thanh toán trong ngày đang chọn.")}</p>:null}
+   {!paid&&orders.length?<><label htmlFor="payment-order">{t("Chọn đơn cần thanh toán")}</label><select id="payment-order" value={orderId} onChange={e=>setOrderId(e.target.value)}>{orders.map(order=><option key={order.id} value={order.id}>{order.name} · {order.dish} {"×"} {order.quantity} · {money(order.price*order.quantity)}</option>)}</select></>:!paid?<p className="payment-warning">{t("Bạn chưa có đơn cần thanh toán trong ngày đang chọn.")}</p>:null}
    {loading?<p role="status"><LoaderCircle className="spin" size={16}/>{t(" Đang tạo QR cho đơn cơm…")}</p>:null}
    {paid?<><div className="bank-success" role="status"><CheckCheck size={20}/>{t(" Đơn đã được xác nhận thanh toán.")}</div>{orders.length?<button className="outline-btn" onClick={()=>setOrderId(orders[0].id)}>{t("Thanh toán đơn khác")}</button>:null}</>:null}
    {qr&&intent&&!paid?<><p className="bank-amount">{money(intent.amount)}</p><img className="payment-qr" src={qr} alt={t("QR chuyển ")+money(intent.amount)+t(' cho ')+bank.accountName}/><div className="bank-transfer-note"><span>{t("Nội dung chuyển khoản")}</span><strong>{intent.description}</strong><small>{t("Đơn của ")}{intent.name} · {w.day.date.slice(8)}/{w.day.date.slice(5,7)}</small></div><div className="bank-qr-actions"><button className="primary" onClick={()=>copy(intent.description).then(()=>setMessage('Đã sao chép nội dung chuyển khoản.')).catch(()=>setError('Chưa sao chép được.'))}><Copy size={15}/>{t(" Sao chép nội dung")}</button><a className="outline-btn" href={qr} download={'tien-com-'+intent.reference+'.png'}><Download size={15}/>{t(" Lưu QR")}</a></div><small className="payment-warning">{t("Giữ nguyên số tiền và mã đơn khi chuyển. QR hết hạn lúc ")}{new Date(intent.expiresAt).toLocaleString(intlLocale,{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})}{t("; trạng thái tự cập nhật sau khi hệ thống nhận và đối chiếu thông báo ngân hàng. Bạn cũng có thể liên hệ người gom cơm để xác nhận.")}</small></>:null}

@@ -1,13 +1,19 @@
 {
   "score": 4,
-  "summary": "Prototype Security Rules retain shared meal views and owner/admin writes, add private owner/admin user profiles, administrator-only ordering blocks, and primary-administrator-only role management. Roles are separate from self-written profiles; self/primary lockout and granting roles to anonymous or blocked identities are rejected. Bank payments add exact order/payee intents and primary-granted anonymous integration identities. Settlement is a conditional atomic REST commit with immutable paired reference and bank-transaction receipts; ordinary users and administrators cannot forge bot receipts.",
-  "verification": "33 tests passed against Standard Auth/Firestore emulators, including existing meal/profile/role/pickup flows, local QR CRC/beneficiary/amount/reference, BIDV raw notification parsing and body/auth validation, real Auth refresh + Firestore REST commits, simultaneous duplicate delivery, forged paired settlement batches, stale/cancelled/expired/changed-payee cases and integration revocation. Browser verified anonymous order + QR without admin controls, administrator payee save, integration create/revoke, webhook paid -> realtime UI update and duplicate delivery; 390px dialog had equal clientWidth/scrollWidth. No production bank transaction was performed. Production Rules are published separately by the owner.",
+  "summary": "Prototype Rules enforce shared meal reads, owner/admin edits, multi-dish name claims, incrementally verified payment groups, immutable bank receipts and settlement markers, preserved money on paid edits/cancellations, and paired immutable administrator reconciliation events. Restaurant links allow only active, unexpired capability gets; administrative roles and private profiles remain restricted.",
+  "verification": "54 tests passed against local Standard Auth/Firestore emulators, including direct SDK attacks, ten-line carts with prior QR links, grouped twelve-line payments over six days, rejected stale groups, interrupted settlement recovery, replay protection, partial top-ups through both single and grouped QRs, legacy opening balances, concurrent refunds, cancellation refunds, and share get/list/revocation/expiry. Browser QA verified three dishes with quantities 2/3/1, a nine-line three-day QR, local fake bank settlement, edit 80k to 120k retaining 80k with 40k due, cancellation retaining an 80k refund and administrator confirmation, VI/EN, and restaurant link creation/revocation. Single-page PDF and three exported JPG pages were visually inspected; multi-page PDF assembly uses the same exported images. No production bank transaction was performed. Rules publication is a separate operator action.",
   "findings": [
     {
       "check": "Abuse controls",
       "severity": "minor",
-      "issue": "Anonymous identity and per-document validation do not impose a trusted global request-rate limit or prevent repeated anonymous account creation.",
-      "recommendation": "Monitor usage and assess Firebase App Check or a dedicated rate limit if the app is shared with a broad audience."
+      "issue": "Anonymous sign-in and per-document bounds do not impose a trusted global write/request-rate limit.",
+      "recommendation": "Monitor usage; assess App Check and trusted rate limiting before broad public adoption."
+    },
+    {
+      "check": "Trusted administrator and capability snapshots",
+      "severity": "minor",
+      "issue": "Administrators are trusted to create restaurant JSON payloads. App projection omits user/payment fields, but free-text notes may contain personal information. Anyone holding an active link can access it, and downloaded copies cannot be revoked.",
+      "recommendation": "Review notes before sharing; revoke links when no longer needed. Use separate projects for untrusted previews."
     }
   ],
   "attacks": [
@@ -118,6 +124,14 @@
     {
       "check": "Missing/wrong bearer, malformed JSON, extra JSON keys, oversized/unsupported content type",
       "result": "rejected before Firebase"
+    },
+    {
+      "check": "Owner manipulation of received/refunded/reversed amounts, unaudited administrator money changes, non-admin refund confirmation, concurrent duplicate refunds, payment receipt replays after refund",
+      "result": "blocked; current balances and immutable history preserved"
+    },
+    {
+      "check": "Group amount tampering, stale QR after order edit, unauthorized resume, public share listing and edits, non-admin share creation/revocation",
+      "result": "blocked; owner resume only finishes accepted bank receipts"
     }
   ],
   "assumptions": [

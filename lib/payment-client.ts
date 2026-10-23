@@ -1,3 +1,4 @@
+import {orderFinance} from './order-finance';
 import {initializeApp,deleteApp} from 'firebase/app';
 import {getAuth,setPersistence,inMemoryPersistence,signInAnonymously,connectAuthEmulator,deleteUser} from 'firebase/auth';
 import {collection,doc,getDocs,runTransaction,serverTimestamp,Timestamp,updateDoc} from 'firebase/firestore';
@@ -5,6 +6,8 @@ import type {MealClient} from './meal-client';
 import {ensureUser} from './firebase-client';
 import {isBankAccount,normalizeBankAccount,newPaymentReference,paymentDescription,type BankAccount,type PaymentIntent} from './payment-model';
 import {PRIMARY_ADMIN_UID} from './user-model';
+import {validOrderId} from './meal-client-model';
+import {invalidateLinkedGroup} from './payment-group-client';
 
 export async function saveBankAccount(client:MealClient,value:BankAccount){
  if(!await client.isAdmin())throw new Error('Chỉ quản trị viên được đổi tài khoản nhận tiền.');
@@ -14,7 +17,7 @@ export async function saveBankAccount(client:MealClient,value:BankAccount){
 }
 export async function requestPayment(client:MealClient,dayId:string,orderId:string):Promise<PaymentIntent>{
  const user=await ensureUser(client.auth),admin=await client.isAdmin();
- if(!/^[A-Za-z0-9_-]{1,100}$/.test(dayId)||!/^[a-f0-9]{64}$/.test(orderId))throw new Error('Đơn thanh toán chưa hợp lệ.');
+ if(!/^[A-Za-z0-9_-]{1,100}$/.test(dayId)||!validOrderId(orderId))throw new Error('Đơn thanh toán chưa hợp lệ.');
  const orderRef=doc(client.db,'days',dayId,'orders',orderId),settingsRef=doc(client.db,'settings','payment'),linkRef=doc(client.db,'paymentLinks',dayId,'orders',orderId);
  return runTransaction(client.db,async tx=>{
   const [orderSnapshot,settings,link]=await Promise.all([tx.get(orderRef),tx.get(settingsRef),tx.get(linkRef)]);
@@ -22,11 +25,11 @@ export async function requestPayment(client:MealClient,dayId:string,orderId:stri
   if(!order||order.cancelled||order.paid)throw new Error('Đơn đã thanh toán, đã hủy hoặc không còn tồn tại.');
   if(order.ownerId!==user.uid&&!admin)throw new Error('Bạn chỉ được tạo QR cho đơn của mình.');
   if(!isBankAccount(account)||!bankVersion?.toMillis())throw new Error('Quản trị viên cần nhập tài khoản nhận tiền trước.');
-  const amount=order.price*order.quantity;
-  if(link.data()?.reference){
+  const amount=orderFinance(order as never).due;
+  if(link.data()?.reference&&link.data()?.kind!=='group'){
    try{
     const code=link.data()!.reference,previous=await tx.get(doc(client.db,'paymentIntents',code)),receipt=await tx.get(doc(client.db,'paymentReceipts',code)),v=previous.data();
-    if(v&&!receipt.exists()&&v.expiresAt.toMillis()>Date.now()+60000&&v.ownerId===order.ownerId&&v.orderCreatedAt.isEqual(order.createdAt)&&v.dishId===order.dishId&&v.price===order.price&&v.quantity===order.quantity&&v.bankConfigUpdatedAt.isEqual(bankVersion))return {...v,expiresAt:v.expiresAt.toDate().toISOString()} as PaymentIntent;
+    if(v&&!receipt.exists()&&v.expiresAt.toMillis()>Date.now()+60000&&v.ownerId===order.ownerId&&v.orderCreatedAt.isEqual(order.createdAt)&&v.dishId===order.dishId&&v.price===order.price&&v.quantity===order.quantity&&v.amount===amount&&v.bankConfigUpdatedAt.isEqual(bankVersion))return {...v,expiresAt:v.expiresAt.toDate().toISOString()} as PaymentIntent;
    }catch(error){
     // Linking an existing Google account can transfer the order to a new UID.
     // Its owner can replace the link without reading the former owner's intent.
@@ -34,6 +37,7 @@ export async function requestPayment(client:MealClient,dayId:string,orderId:stri
    }
   }
   const reference=newPaymentReference(),description=paymentDescription(reference),expiresAt=Timestamp.fromMillis(Date.now()+23*3600000);
+  const invalidate=await invalidateLinkedGroup(client,tx,dayId,orderId);invalidate();
   const value={bankBin:account.bankBin,bankName:account.bankName,accountNumber:account.accountNumber,accountName:account.accountName,reference,dayId,orderId,ownerId:order.ownerId,requestedBy:user.uid,name:order.name,amount,dishId:order.dishId,price:order.price,quantity:order.quantity,description,orderCreatedAt:order.createdAt,bankConfigUpdatedAt:bankVersion,createdAt:serverTimestamp(),expiresAt};
   tx.set(doc(client.db,'paymentIntents',reference),value);tx.set(linkRef,{reference,updatedAt:serverTimestamp()});
   return {...value,expiresAt:expiresAt.toDate().toISOString()};

@@ -122,3 +122,7 @@ Chạy `npm run build`, `npm run typecheck`, `npm test`. Bộ kiểm thử dùng
 Rules là prototype đã kiểm thử, cần đối chiếu với chính sách và môi trường triển khai. I've set up prototype Security Rules to keep the data in Firestore safe. They are designed to be secure for exact-amount order settlements with paired immutable receipts, restricted integration identities and owner/admin payment requests. However, you should review and verify them before broadly sharing your app. If you'd like, I can help you harden these rules.
 
 Tài liệu triển khai dùng [Firebase Auth REST](https://firebase.google.com/docs/reference/rest/auth/), [Firestore REST và Firebase ID tokens](https://firebase.google.com/docs/firestore/use-rest-api), [atomic Commit](https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.documents/commit).
+
+## Multiple dishes, partial balances and refunds
+
+See [orders, payment differences and restaurant sharing](orders-payments-sharing.md) for grouped QRs, resumable settlement, preserved paid amounts, administrator-confirmed refunds and expiring restaurant links. QR amounts now represent the remaining balance, which can be lower than the meal total. Publish the full updated Rules before deploying.
