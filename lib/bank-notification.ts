@@ -7,11 +7,24 @@ function uniqueField(text:string,labels:string){
  const values=[...text.matchAll(expression)].map(m=>m[1].trim());
  if(values.length!==1)throw new NotificationError('Thông báo thiếu hoặc trùng trường bắt buộc.');return values[0];
 }
+function techcombankText(raw:string){
+ const original=raw.normalize('NFC').replace(/\r\n?/g,'\n').trim();
+ if(!/^\+[ \t]*VND[ \t]+\d/iu.test(original))return {source:original,currencyFirst:false};
+ // Some Shortcut inputs concatenate the entire notification several times.
+ // Collapse only identical complete blocks; never discard conflicting fields.
+ const blocks=original.split(/(?=\+[ \t]*VND[ \t]+\d)/iu).map(value=>value.trim()).filter(Boolean);
+ if(blocks.length>8||blocks.some(value=>value!==blocks[0]))throw new NotificationError('Thông báo ghép nhiều giao dịch hoặc các bản lặp không giống nhau.');
+ const source=blocks[0],header=/^\+[ \t]*VND[ \t]+(\d[\d,.]*)[ \t]*(?:\n|(?=Account[ \t]*:))/iu.exec(source);
+ if(!header)throw new NotificationError('Dòng số tiền Techcombank chưa hợp lệ.');
+ return {source:'Amount: + '+header[1]+' VND\n'+source.slice(header[0].length),currencyFirst:true};
+}
 export function parseBankNotification(raw:string,receivedAt=new Date()):BankNotification{
  if(typeof raw!=='string'||!raw.trim()||raw.length>12000)throw new NotificationError('Thông báo trống hoặc quá dài.');
+ const {source,currencyFirst}=techcombankText(raw);
  // Some mobile automations flatten line breaks. Restore boundaries only at
  // known bank labels; duplicates then fail the same strict field checks.
- const text=raw.normalize('NFC').replace(/\r\n?/g,'\n').replace(/(Transaction (?:Time|Amount|Details?|Code)|Details?|Nội dung|Noi dung|Ending Balance|Số dư|So du|Account(?: thanh toán)?|Amount|Balance|Số tiền(?: giao dịch)?|So tien(?: giao dich)?|Tài khoản(?: thanh toán)?|Tai khoan(?: thanh toan)?|Mã giao dịch|Ma giao dich|Mã GD|Ma GD|Thời gian(?: giao dịch)?|Thoi gian(?: giao dich)?)\s*:/giu,'\n$&').replace(/\bAccount[ \t]+(?=\d)/giu,'\n$&');
+ let text=source.replace(/(Transaction (?:Time|Amount|Details?|Code)|Details?|Nội dung|Noi dung|Ending Balance|Số dư|So du|Account(?: thanh toán)?|Amount|Balance|Số tiền(?: giao dịch)?|So tien(?: giao dich)?|Tài khoản(?: thanh toán)?|Tai khoan(?: thanh toan)?|Mã giao dịch|Ma giao dich|Mã GD|Ma GD|Thời gian(?: giao dịch)?|Thoi gian(?: giao dich)?)\s*:/giu,'\n$&').replace(/\bAccount[ \t]+(?=\d)/giu,'\n$&');
+ if(currencyFirst)text=text.replace(/(?:^|\n)[ \t]*Account[ \t]*:[ \t]*/giu,'\nAccount ');
  const refs=[...new Set(text.toUpperCase().match(/\bCOM[A-F0-9]{20}\b/g)||[])];
  if(refs.length!==1)throw new NotificationError('Không tìm thấy một mã đơn duy nhất trong thông báo.');
  // Techcombank's short notification has no bank transaction ID or timestamp.
@@ -28,9 +41,9 @@ export function parseBankNotification(raw:string,receivedAt=new Date()):BankNoti
   if(!Number.isSafeInteger(amount)||amount<1000||amount>30000000)throw new NotificationError('Số tiền giao dịch ngoài giới hạn.');
   // Require the supplied bank format, but never treat Balance as payment amount.
   const balance=uniqueField(text,'Balance');
-  if(!/^\d[\d,.]*(?:[ \t]*(?:VND|VNĐ|₫|đ))?(?:[ \t]+[^\d\s].*)?$/iu.test(balance))throw new NotificationError('Định dạng thông báo Techcombank chưa hợp lệ.');
+  if(!/^(?:VND[ \t]+)?\d[\d,.]*(?:[ \t]*(?:VND|VNĐ|₫|đ))?(?:[ \t]+[^\d\s].*)?$/iu.test(balance))throw new NotificationError('Định dạng thông báo Techcombank chưa hợp lệ.');
   if(!Number.isFinite(receivedAt.getTime()))throw new NotificationError('Thời điểm nhận thông báo chưa hợp lệ.');
-  const fingerprint=createHash('sha256').update(raw.normalize('NFC').replace(/\s+/g,' ').trim().toUpperCase()).digest('hex');
+  const fingerprint=createHash('sha256').update(source.replace(/\s+/g,' ').trim().toUpperCase()).digest('hex');
   return {reference:refs[0],amount,accountNumber:accounts[0][1].trim(),bankBin:'970407',transactionId:'TCBNOTICE-'+fingerprint,occurredAt:receivedAt.toISOString()};
  }
  const amountText=uniqueField(text,'Transaction Amount|Số tiền(?: giao dịch)?|So tien(?: giao dich)?');

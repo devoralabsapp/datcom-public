@@ -47,6 +47,15 @@ test('Techcombank short notices use only Amount, keep a stable fingerprint, and 
  assert.equal(parseBankNotification(raw.replace('+ 30,000','+ 30,000 VND'),receivedAt).amount,30000);
 });
 
+test('Techcombank currency-first notices collapse only identical complete repeated blocks',()=>{
+ const raw=`+ VND 50,000\nAccount: 00012345678901\nBalance: VND 52,000\n${reference}`;
+ const receivedAt=new Date('2026-10-23T05:00:00.000Z'),parsed=parseBankNotification(raw,receivedAt);
+ assert.equal(parsed.bankBin,'970407');assert.equal(parsed.amount,50000);assert.equal(parsed.accountNumber,'00012345678901');assert.equal(parsed.reference,reference);
+ for(const text of [raw.repeat(4),[raw,raw,raw,raw].join('\n'),raw.replace(/\n/g,' '),raw.replace(/\n/g,' ').repeat(4),raw.replace(/\n/g,'\r\n').repeat(4)])assert.equal(parseBankNotification(text,receivedAt).transactionId,parsed.transactionId);
+ assert.equal(parseBankNotification(raw.replace('50,000','2,000'),receivedAt).amount,2000);
+ for(const invalid of [raw.replace(reference,'NGUYEN VAN MAU transfer').repeat(4),raw+raw.replace('50,000','40,000'),raw+raw.replace('52,000','53,000'),raw+raw.replace('00012345678901','00011111111111'),raw+raw.replace(reference,'COM'+'B'.repeat(20)),raw.repeat(9),raw.replace('+ VND','- VND'),raw.replace('+ VND','VND'),raw.replace('VND 50,000','USD 50,000'),raw.replace('50,000','50,00'),raw.replace('Account: 00012345678901\n',''),raw+'\nAmount: + 50,000',raw+'\nAccount: 00012345678901'])assert.throws(()=>parseBankNotification(invalid));
+});
+
 test('Techcombank rejects missing or ambiguous references, debits, mixed formats and incomplete fields',()=>{
  const raw=`Account 00012345678901\nAmount: + 30,000\nBalance: 39,184\nNGUYEN VAN MAU transfer ${reference}`;
  for(const invalid of [raw.replace(reference,''),raw+' COM'+'B'.repeat(20),raw.replace('+ 30,000','- 30,000'),raw.replace('+ 30,000','30,000'),raw.replace('+ 30,000','+ 30,000 USD'),raw.replace('+ 30,000','+ 30,00'),raw.replace('+ 30,000','+ 30000.5'),raw.replace('+ 30,000','+ 999'),raw.replace('+ 30,000','+ 30000001'),raw.replace('00012345678901','***8901'),raw+'\nAccount 00011111111111',raw+'\nAmount: + 40,000',raw+'\nBalance: 99',raw.replace('Amount: + 30,000\n',''),raw.replace('Balance: 39,184\n',''),raw+'\nTransaction Code: FAKE-001',raw+'\nBIDV notice to customer'])assert.throws(()=>parseBankNotification(invalid),invalid);

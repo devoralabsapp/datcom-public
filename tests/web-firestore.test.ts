@@ -310,13 +310,17 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    const orderRef=doc(payer.db,'days',payDay,'orders',own.id),secret='t'.repeat(64);
    const env={NODE_ENV:'test',NEXT_PUBLIC_FIREBASE_PROJECT_ID:project,NEXT_PUBLIC_FIREBASE_API_KEY:'fake-api-key',PAYMENT_WEBHOOK_SECRET:secret,PAYMENT_FIREBASE_REFRESH_TOKEN:bot.auth.currentUser!.refreshToken,FIRESTORE_EMULATOR_HOST:process.env.FIRESTORE_EMULATOR_HOST,FIREBASE_AUTH_EMULATOR_HOST:process.env.FIREBASE_AUTH_EMULATOR_HOST};
    const raw=(code=intent.reference,amount=40000,account=bank.accountNumber)=>`Account ${account}\nAmount: + ${amount.toLocaleString('en-US')}\nBalance: 39,184\nNGUYEN VAN MAU transfer ${code}`;
+   const currencyFirst=(code=intent.reference,amount=40000)=>`+ VND ${amount.toLocaleString('en-US')}\nAccount: ${bank.accountNumber}\nBalance: VND 52,000\n${code}`;
    async function notify(text:string){const response=await bankWebhook(new Request('https://example.test/api/payments/bank-notification',{method:'POST',headers:{Authorization:'Bearer '+secret,'Content-Type':'text/plain'},body:text}),env);return {httpStatus:response.status,...await response.json()};}
    assert.equal((await notify(raw(''))).httpStatus,422);
    assert.equal((await notify(raw(intent.reference,30000))).reason,'amount_mismatch');
    assert.equal((await notify(raw(intent.reference,40000,'00011111111111'))).reason,'account_mismatch');
    assert.equal((await notify(raw().replace('+ 40,000','- 40,000'))).httpStatus,422);
+   assert.equal((await notify(currencyFirst('',40000).repeat(4))).httpStatus,422);
+   assert.equal((await notify(currencyFirst(intent.reference,50000).repeat(4))).reason,'amount_mismatch');
+   assert.equal((await notify(currencyFirst()+currencyFirst(intent.reference,50000))).httpStatus,422);
    assert.equal((await getDoc(orderRef)).data()?.paid,false);
-   const before=Date.now(),outcomes=await Promise.all([notify(raw()),notify(raw().replace(/\n/g,' '))]);
+   const before=Date.now(),outcomes=await Promise.all([notify(currencyFirst().repeat(4)),notify(currencyFirst().replace(/\n/g,' '))]);
    assert.deepEqual(outcomes.map(o=>o.status).sort(),['duplicate','paid']);assert.equal((await getDoc(orderRef)).data()?.paid,true);
    const receipt=(await getDoc(doc(admin.db,'paymentReceipts',intent.reference))).data()!;
    assert.equal(receipt.amount,40000);assert.equal(receipt.bankBin,'970407');assert.match(receipt.transactionId,/^TCBNOTICE-[a-f0-9]{64}$/);assert.ok(receipt.occurredAt.toMillis()>=before&&receipt.occurredAt.toMillis()<=Date.now());assert.equal(receipt.notification,undefined);assert.equal(receipt.balance,undefined);

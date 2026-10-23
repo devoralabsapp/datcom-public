@@ -37,7 +37,7 @@ Balance: [đã che số dư]
 NGUYEN VAN MAU transfer
 ```
 
-Khi đọc được thông báo, log có thêm ngân hàng, số tiền và mã COM. Phần xem trước tối đa 1.200 ký tự: che tài khoản chỉ còn bốn ký tự cuối, bỏ số dư ở các nhãn BIDV/Techcombank đã hỗ trợ, che khóa đã cấu hình và chuỗi Bearer. Không gửi header Authorization, token Firebase, raw JSON sai định dạng hoặc dữ liệu đơn khác. Nội dung chuyển khoản/tên trong thông báo vẫn có thể xuất hiện trong channel riêng. Telegram được tắt xem trước liên kết; tin log được bật bảo vệ nội dung và log gửi trùng không phát âm thanh.
+Khi đọc được thông báo, log có thêm ngân hàng, số tiền và mã COM. Phần xem trước tối đa 1.200 ký tự: che tài khoản chỉ còn bốn ký tự cuối, bỏ số dư ở các nhãn BIDV/Techcombank đã hỗ trợ (gồm `Balance: VND 52,000` và dạng tiền đứng trước/sau VND), che khóa đã cấu hình và chuỗi Bearer. Không gửi header Authorization, token Firebase, raw JSON sai định dạng hoặc dữ liệu đơn khác. Nội dung chuyển khoản/tên trong thông báo vẫn có thể xuất hiện trong channel riêng. Telegram được tắt xem trước liên kết; tin log được bật bảo vệ nội dung và log gửi trùng không phát âm thanh.
 
 Tin được gửi sau khi API đã trả kết quả bằng `after()` của Next.js, timeout 5 giây. Telegram lỗi không sửa trạng thái đơn và không đổi phản hồi API. Có thể thấy cảnh báo `[payment-telegram]` trong Vercel Logs; cảnh báo chỉ ghi loại lỗi/trạng thái HTTP, không ghi URL chứa token. Đây là log hỗ trợ vận hành theo kiểu best effort, không phải hàng đợi đảm bảo giao tin hay sổ đối soát ngân hàng. Không tự thử gửi lại khi Telegram lỗi để tránh đăng lặp nếu tin đã tới nhưng phản hồi bị mất. Biên nhận Firestore vẫn là dữ liệu xác nhận thanh toán của ứng dụng.
 

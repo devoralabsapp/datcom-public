@@ -80,6 +80,17 @@ NGUYEN VAN MAU transfer COM0123456789ABCDEF0123
 
 API đọc tài khoản ở dòng `Account` (không có dấu hai chấm), đọc tiền vào từ `Amount`, và bỏ qua số dư `Balance`. Với mẫu này, tiền là VND; có thể không có chữ VND sau số tiền. Chấp nhận xuống dòng hoặc gom một dòng, dấu phân tách nghìn bằng phẩy/chấm; từ chối số âm, thiếu dấu `+`, ngoại tệ, trường trùng và nội dung trộn định dạng BIDV.
 
+Mẫu Techcombank đặt tiền ở đầu thông báo cũng được hỗ trợ (dữ liệu giả):
+
+```text
++ VND 50,000
+Account: 00012345678901
+Balance: VND 52,000
+COM0123456789ABCDEF0123
+```
+
+Nếu Shortcut ghép nguyên thông báo kiểu `+ VND …` này nhiều lần, API gộp tối đa 8 bản **giống hệt toàn bộ nội dung** thành một trước khi đọc và tính dấu nhận diện; gửi một bản hoặc bốn bản giống nhau có cùng dấu nhận diện. Có thể xuống dòng giữa các bản hoặc ghép liền. Không bỏ qua trường trùng tùy ý: các đoạn khác số tiền, tài khoản, số dư, mã COM hay nội dung đều bị từ chối. Shortcut nên gửi nội dung của một thông báo duy nhất, tránh ghép danh sách thuộc tính lặp lại.
+
 **Thông báo vẫn phải có một mã COM của QR**, số tiền chính xác và tài khoản nhận trùng cấu hình/đơn. Nội dung chỉ có tên người chuyển và chữ `transfer` sẽ trả `422`, không tự tích đã trả. Người chuyển giữ nguyên mã khi quét QR; không suy đoán đơn từ tên hay số tiền.
 
 Mẫu ngắn không có mã giao dịch hoặc thời gian do ngân hàng cung cấp. API tạo `transactionId` dạng `TCBNOTICE-<SHA256>` từ nguyên văn thông báo sau khi chuẩn hóa khoảng trắng/hoa thường, và ghi thời điểm nhận tại máy chủ vào `occurredAt`. Đây là **dấu nhận diện thông báo và thời điểm nhận**, không phải mã/thời gian giao dịch ngân hàng. Không thể xác minh độc lập ngày giao dịch từ mẫu này; Shortcut nên chuyển thông báo ngay khi nhận, không dùng để nạp lịch sử. QR hết hạn, đã thay đổi hoặc đã xử lý vẫn bị chặn. Biên nhận bất biến theo mã COM ngăn gửi lại, kể cả khi quản trị đổi đơn về chưa trả. Không lưu nguyên văn hoặc số dư trong Firestore.
