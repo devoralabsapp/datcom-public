@@ -14,6 +14,9 @@ import {moveGuestOrders} from '../lib/client-auth';
 import {readPickup,drawPickup} from '../lib/pickup-client';
 import {pickupWeek,pickupDateOffset} from '../lib/pickup';
 import {localNow} from '../lib/meal-client-model';
+import {saveBankAccount,requestPayment,createPaymentIntegration,revokePaymentIntegration} from '../lib/payment-client';
+import {bankWebhook} from '../lib/payment-webhook';
+import {createHash} from 'node:crypto';
 
 setLogLevel('silent');
 const project='demo-datcom-tests';
@@ -23,7 +26,7 @@ function googleToken(id:string,email=id+'@example.test'){
  return encode({alg:'none',typ:'JWT'})+'.'+encode({iss:'https://accounts.google.com',aud:'test-google-client',sub:id,email,email_verified:true,name:'Google Sample',iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+3600})+'.';
 }
 
-test('Web SDK and Security Rules enforce the complete meal flow',{timeout:120000},async t=>{
+test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000},async t=>{
  assert.ok(process.env.FIRESTORE_EMULATOR_HOST&&process.env.FIREBASE_AUTH_EMULATOR_HOST,'Run npm test for local Firebase emulators.');
  const [host,port]=process.env.FIRESTORE_EMULATOR_HOST!.split(':');
  const environment=await initializeTestEnvironment({projectId:project,firestore:{host,port:Number(port),rules:fs.readFileSync('firestore.rules','utf8')}});
@@ -236,6 +239,66 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:120000
    const accessRef=doc(db,'userAccess',uid);for(const extra of [{blocked:1},{extra:true},{updatedBy:uid},{updatedAt:Timestamp.fromMillis(0)}])await assertFails(updateDoc(accessRef,{...extra,...('updatedAt' in extra?{}:{updatedAt:serverTimestamp()})}));await assertFails(deleteDoc(accessRef));
    await assert.rejects(listManagedUsers(google));const directory=await listManagedUsers(root);assert.equal(directory.canManageRoles,true);assert.ok(directory.users.some(p=>p.uid===uid&&p.orderCount>=1));assert.equal((await listManagedUsers(admin)).canManageRoles,false);
    await assertFails(getDocs(collection(guest.db,'admins')));await assertFails(getDoc(doc(guest.db,'userAccess',uid)));
+  });
+  await t.test('bank payments bind QR references and match raw BIDV notifications atomically through REST and Rules',async()=>{
+   const payDay='day-2099-02-01',bank={bankBin:'970418',bankName:'BIDV',accountNumber:'000123456789',accountName:'NGUYEN VAN MAU'};
+   await admin.write({action:'day',create:true,date:'2099-02-01',menu,status:'open'});
+   const payer=await client('bank-payer'),other=await client('bank-other'),bot=await client('bank-bot');
+   const uid=PRIMARY_ADMIN_UID;await bootstrap(uid);const rootDb=environment.authenticatedContext(uid,{email:'primary@example.test',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore() as unknown as Firestore;
+   const root=new MealClient({app:admin.auth.app,currentUser:{uid,isAnonymous:false,email:'primary@example.test',getIdTokenResult:async()=>({claims:{email_verified:true},signInProvider:'google.com'})},authStateReady:async()=>{}} as unknown as Auth,rootDb,source);
+   await assert.rejects(saveBankAccount(payer,bank));await saveBankAccount(admin,bank);
+   assert.equal((await payer.read(payDay)).paymentAvailable,true);
+   for(const extra of [{accountNumber:'../secret'},{bankBin:'BIDV'},{accountName:''},{extra:true},{updatedAt:Timestamp.fromMillis(0)}])await assertFails(setDoc(doc(payer.db,'settings','payment'),{...bank,updatedAt:serverTimestamp(),...extra}));
+   await assertFails(setDoc(doc(admin.db,'settings','payment'),{...bank,accountName:'x'.repeat(71),updatedAt:serverTimestamp()}));
+   const placed=await payer.write({action:'order',dayId:payDay,name:'Khách QR mẫu',dish:menu[0].name});let own=placed.orders.find(o=>o.actor===payer.auth.currentUser!.uid)!;
+   await assert.rejects(requestPayment(other,payDay,own.id));
+   const [intent,repeat]=await Promise.all([requestPayment(payer,payDay,own.id),requestPayment(payer,payDay,own.id)]);assert.equal(intent.reference,repeat.reference);assert.equal(intent.amount,40000);assert.ok(intent.description.includes(intent.reference));
+   await assertFails(getDoc(doc(other.db,'paymentIntents',intent.reference)));await assertFails(getDocs(collection(payer.db,'paymentIntents')));
+   const original=(await getDoc(doc(payer.db,'paymentIntents',intent.reference))).data()!;
+   for(const extra of [{amount:1},{expiresAt:Timestamp.fromMillis(Date.now()+2*86400000)},{accountNumber:'9999'},{ownerId:other.auth.currentUser!.uid},{extra:true}]){
+    const code='COM'+createHash('sha256').update(JSON.stringify(extra)).digest('hex').slice(0,20).toUpperCase(),batch=writeBatch(payer.db);
+    batch.set(doc(payer.db,'paymentIntents',code),{...original,reference:code,description:code,createdAt:serverTimestamp(),...extra});batch.set(doc(payer.db,'paymentLinks',payDay,'orders',own.id),{reference:code,updatedAt:serverTimestamp()});await assertFails(batch.commit());
+   }
+   await assertFails(updateDoc(doc(payer.db,'paymentIntents',intent.reference),{amount:1}));await assertFails(deleteDoc(doc(payer.db,'paymentIntents',intent.reference)));
+   await assertFails(setDoc(doc(payer.db,'paymentLinks',payDay,'orders',own.id),{reference:intent.reference,updatedAt:serverTimestamp()}));
+   await assertFails(setDoc(doc(bot.db,'paymentIntegrations',bot.auth.currentUser!.uid),{enabled:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));
+   await setDoc(doc(rootDb,'paymentIntegrations',bot.auth.currentUser!.uid),{enabled:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+   const orderRef=doc(bot.db,'days',payDay,'orders',own.id);
+   await assertFails(updateDoc(orderRef,{paid:true,updatedAt:serverTimestamp()}));await assertFails(updateDoc(doc(bot.db,'days',payDay),{status:'closed',updatedAt:serverTimestamp()}));
+   await assertFails(setDoc(doc(bot.db,'paymentTransactions','a'.repeat(64)),{reference:intent.reference,createdAt:serverTimestamp()}));
+   await assertFails(getDocs(collection(bot.db,'userProfiles')));await assertFails(setDoc(doc(bot.db,'admins',bot.auth.currentUser!.uid),{enabled:true}));
+   async function forgedSettlement(extra:Record<string,unknown>,orderExtra:Record<string,unknown>={}){
+    const receipt={reference:intent.reference,transactionId:'FAKE-DIRECT-ATTACK',amount:intent.amount,bankBin:bank.bankBin,accountNumber:bank.accountNumber,occurredAt:Timestamp.now(),notificationHash:'a'.repeat(64),createdBy:bot.auth.currentUser!.uid,createdAt:serverTimestamp(),...extra};
+    const key=createHash('sha256').update(`${receipt.bankBin}|${receipt.accountNumber}|${receipt.transactionId}`.toLowerCase()).digest('hex'),batch=writeBatch(bot.db);
+    batch.set(doc(bot.db,'paymentReceipts',intent.reference),{...receipt,transactionKey:key});batch.set(doc(bot.db,'paymentTransactions',key),{reference:intent.reference,createdAt:serverTimestamp()});batch.update(orderRef,{paid:true,updatedAt:serverTimestamp(),...orderExtra});await assertFails(batch.commit());assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   }
+   for(const fields of [{amount:1},{accountNumber:'000000000001'},{bankBin:'970436'},{occurredAt:Timestamp.fromMillis(0)},{transactionId:'x'.repeat(121)},{notificationHash:'z'.repeat(64)},{createdBy:other.auth.currentUser!.uid},{extra:true}])await forgedSettlement(fields);
+   await forgedSettlement({},{note:'bot cannot edit meals'});await forgedSettlement({},{quantity:2});
+   const now=new Date(Date.now()+7*3600000).toISOString(),time=`${now.slice(11,19)} ${now.slice(8,10)}/${now.slice(5,7)}/${now.slice(0,4)}`;
+   const raw=(code:string,amount=40000,transaction='FAKE-BANK-001',account=bank.accountNumber)=>`BIDV notice to customer\nTransaction Time: ${time}\nAccount thanh toán: ${account}\nTransaction Amount: +${amount.toLocaleString('en-US')} VND\nEnding Balance: 99,999,999 VND\nTransaction Details: Tien com ${code}\nTransaction Code: ${transaction}`;
+   const secret='k'.repeat(64),env={NODE_ENV:'test',NEXT_PUBLIC_FIREBASE_PROJECT_ID:project,NEXT_PUBLIC_FIREBASE_API_KEY:'fake-api-key',PAYMENT_WEBHOOK_SECRET:secret,PAYMENT_FIREBASE_REFRESH_TOKEN:bot.auth.currentUser!.refreshToken,FIRESTORE_EMULATOR_HOST:process.env.FIRESTORE_EMULATOR_HOST,FIREBASE_AUTH_EMULATOR_HOST:process.env.FIREBASE_AUTH_EMULATOR_HOST};
+   async function notify(text:string,options:Record<string,string>={}){const response=await bankWebhook(new Request('https://example.test/api/payments/bank-notification',{method:'POST',headers:{Authorization:'Bearer '+secret,'Content-Type':'application/json'},body:JSON.stringify({notification:text})}),{...env,...options});const body=await response.json();return {httpStatus:response.status,...body};}
+   assert.equal((await notify(raw(intent.reference,41000))).reason,'amount_mismatch');assert.equal((await notify(raw(intent.reference,40000,'FAKE-WRONG-ACCOUNT','999999999'))).reason,'account_mismatch');assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   const absent='COM'+('F'.repeat(20));assert.equal((await notify(raw(absent))).reason,'unknown_reference');
+   const outcomes=await Promise.all([notify(raw(intent.reference)),notify(raw(intent.reference))]);assert.deepEqual(outcomes.map(o=>o.status).sort(),['duplicate','paid']);
+   assert.equal((await getDoc(orderRef)).data()?.paid,true);assert.equal((await getDoc(doc(admin.db,'paymentReceipts',intent.reference))).data()?.amount,40000);assert.equal((await notify(raw(intent.reference))).reason,'reference_already_processed');
+   await assertFails(updateDoc(doc(bot.db,'paymentReceipts',intent.reference),{amount:1}));await assertFails(deleteDoc(doc(bot.db,'paymentReceipts',intent.reference)));await assertFails(getDoc(doc(other.db,'paymentReceipts',intent.reference)));
+   await admin.write({action:'paid',dayId:payDay,id:own.id,paid:false});await notify(raw(intent.reference));assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   const renewed=await requestPayment(payer,payDay,own.id);assert.notEqual(renewed.reference,intent.reference);assert.equal((await notify(raw(renewed.reference))).reason,'transaction_already_processed');assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   await payer.write({action:'order',dayId:payDay,id:own.id,name:own.name,dish:own.dish,quantity:2});assert.equal((await notify(raw(renewed.reference,40000,'FAKE-BANK-002'))).reason,'order_changed');
+   const changed=await requestPayment(payer,payDay,own.id);assert.equal(changed.amount,80000);assert.notEqual(changed.reference,renewed.reference);assert.equal((await notify(raw(renewed.reference,40000,'FAKE-BANK-003'))).reason,'qr_replaced');
+   await saveBankAccount(admin,{...bank,accountNumber:'000999999999'});assert.equal((await notify(raw(changed.reference,80000,'FAKE-BANK-004'))).reason,'payee_changed');await saveBankAccount(admin,bank);
+   const fresh=await requestPayment(payer,payDay,own.id);await payer.write({action:'cancel',dayId:payDay,id:own.id});assert.equal((await notify(raw(fresh.reference,80000,'FAKE-BANK-005'))).reason,'order_cancelled');
+   await payer.write({action:'order',dayId:payDay,name:own.name,dish:own.dish,quantity:1});const expired=await requestPayment(payer,payDay,own.id);
+   await environment.withSecurityRulesDisabled(async c=>updateDoc(doc(c.firestore() as unknown as Firestore,'paymentIntents',expired.reference),{expiresAt:Timestamp.fromMillis(Date.now()-1000)}));assert.equal((await notify(raw(expired.reference,40000,'FAKE-BANK-006'))).reason,'qr_expired');
+   const active=await requestPayment(payer,payDay,own.id);await revokePaymentIntegration(root,bot.auth.currentUser!.uid);assert.equal((await notify(raw(active.reference,40000,'FAKE-BANK-007'))).httpStatus,503);assert.equal((await getDoc(orderRef)).data()?.paid,false);
+   const previousHost=process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST=process.env.FIREBASE_AUTH_EMULATOR_HOST;
+   try{const setup=await createPaymentIntegration(root);assert.equal(setup.secret.length,64);const configured=await notify(raw(active.reference,40000,'FAKE-BANK-008'),{PAYMENT_FIREBASE_REFRESH_TOKEN:setup.refreshToken});assert.equal(configured.reference,active.reference,JSON.stringify(configured));assert.equal((await getDoc(orderRef)).data()?.paid,true);await revokePaymentIntegration(root,setup.uid);}finally{if(previousHost===undefined)delete process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;else process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST=previousHost;}
+   const transferring=await client('bank-transfer-guest'),target=await client('bank-transfer-google','bank-transfer-google');
+   const transferView=await transferring.write({action:'order',dayId:payDay,name:'QR chuyển tài khoản',dish:menu[0].name}),transferOrder=transferView.orders.find(o=>o.actor===transferring.auth.currentUser!.uid)!;
+   const oldIntent=await requestPayment(transferring,payDay,transferOrder.id),from=transferring.auth.currentUser!.uid,to=target.auth.currentUser!.uid;
+   await setDoc(doc(transferring.db,'accountLinks',from),{targetUid:to,createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+300000)});await moveGuestOrders(target.db,from,to);
+   const transferredIntent=await requestPayment(target,payDay,transferOrder.id);assert.notEqual(transferredIntent.reference,oldIntent.reference);assert.equal(transferredIntent.ownerId,to);assert.equal(transferredIntent.amount,40000);
   });
  }finally{const coverage=await fetch(`http://${host}:${port}/emulator/v1/projects/${project}:ruleCoverage`);fs.mkdirSync('.firebase',{recursive:true});fs.writeFileSync('.firebase/rules-coverage.json',await coverage.text());await Promise.all(databases.map(db=>terminate(db)));await Promise.all(apps.map(app=>deleteApp(app)));await environment.cleanup();}
 });
