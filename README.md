@@ -12,13 +12,14 @@ This is an early-stage, MIT-licensed application maintained by [devoralabsapp](h
 
 ## What it does
 
-- **Daily menus and orders:** choose dishes, quantities, and notes; remember a guest's name on that browser; edit or cancel your own orders before closing.
+- **Daily menus and orders:** add multiple dishes to one cart, set quantities and notes; remember a guest's name on that browser; edit or cancel your own orders before closing.
 - **Optional Google sign-in:** guest ordering uses Firebase Anonymous Authentication. Linking Google supports continued access across devices.
 - **Shared visibility:** everyone can see team orders and statistics. Ownership and administrator permissions control changes.
-- **Administration:** publish menus, open or close ordering, export CSV, manage booking access, and assign administrator roles through the primary administrator.
+- **Administration:** publish menus, open or close ordering, export PDF/JPG and revocable restaurant links, manage booking access, and assign administrator roles through the primary administrator.
 - **Payment tracking:** totals, paid and unpaid amounts, charts over time, and balances per person, with today/week/month/all-time filters. Web orders are the default source.
 - **Fair pickup draws:** select 1–10 people, defaulting to two. People with fewer selections that week have priority; equal-priority participants are chosen randomly. Results are saved once per day.
-- **VietQR transfers:** administrators configure the receiving bank account; QR codes are generated locally with an exact amount and a unique order reference.
+- **VietQR transfers:** administrators configure the receiving bank account; QR codes are generated locally for one order or several days, with the exact remaining amount and a unique reference.
+- **Paid edits and refunds:** preserve money received after changing or cancelling meals; collect only the difference and let administrators confirm actual refunds with immutable adjustment history.
 - **Optional payment automation:** a secret-protected API accepts raw BIDV or Techcombank notifications forwarded by an administrator's device. Matching notifications settle existing orders through Firestore Rules; optional redacted Telegram logs help operations.
 - **Vietnamese and English UI:** the browser remembers the selected language. User names, dish names, notes, and transfer references retain their original values.
 
@@ -65,6 +66,7 @@ Tests use local Firebase Auth and Firestore emulators with a `demo-` project, no
 
 - [Setup and Vercel deployment](docs/setup.md) — English
 - [Payment integration and Telegram logs](docs/payment-integration.md) — English
+- [Multiple dishes, payment differences, refunds and restaurant sharing](docs/orders-payments-sharing.md) — English / Tiếng Việt
 - [Localization guide](docs/localization.md) — English
 - [Detailed application and operations guide](README.vi.md) — Tiếng Việt
 - [Firebase/Vercel deployment notes](docs/deploy-vercel.md) — Tiếng Việt

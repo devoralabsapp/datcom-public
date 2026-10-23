@@ -1,3 +1,4 @@
+import {orderFinance} from '../lib/order-finance';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -15,8 +16,11 @@ import {readPickup,drawPickup} from '../lib/pickup-client';
 import {pickupWeek,pickupDateOffset} from '../lib/pickup';
 import {localNow} from '../lib/meal-client-model';
 import {saveBankAccount,requestPayment,createPaymentIntegration,revokePaymentIntegration} from '../lib/payment-client';
-import {bankWebhook} from '../lib/payment-webhook';
+import {bankWebhook,resumeGroupPayment} from '../lib/payment-webhook';
+import {restaurantSummary} from '../lib/restaurant-summary';
+import {createRestaurantShare,revokeRestaurantShare} from '../lib/restaurant-share-client';
 import {createHash} from 'node:crypto';
+import {requestPaymentGroup} from '../lib/payment-group-client';
 
 setLogLevel('silent');
 const project='demo-datcom-tests';
@@ -83,7 +87,7 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    await post(admin,{action:'paid',id:order.id,paid:true});
    const changedMenu=[{...menu[0],price:45000},menu[1]];await post(admin,{action:'day',menu:changedMenu,status:'open'});
    const note=await post(a,{action:'order',id:order.id,name:order.name,dish:order.dish,quantity:2,note:'Ít cơm'});assert.equal(note.orders[0].price,40000);assert.equal(note.orders[0].paid,true);
-   const qty=await post(a,{action:'order',id:order.id,name:order.name,dish:order.dish,quantity:1});assert.equal(qty.orders[0].paid,false);
+   const qty=await post(a,{action:'order',id:order.id,name:order.name,dish:order.dish,quantity:1});assert.equal(qty.orders[0].paid,true);assert.equal(qty.orders[0].receivedAmount,80000);
    const dish=await post(a,{action:'order',id:order.id,name:order.name,dish:menu[1].name,quantity:1});assert.equal(dish.orders[0].price,50000);
    assert.equal((await post(admin,{action:'order',id:order.id,name:order.name,dish:menu[1].name,quantity:3})).orders.find(o=>o.id===order.id)?.quantity,3);
    const dayRef=doc(admin.db,'days',dayId);
@@ -328,5 +332,111 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    const renewed=await requestPayment(payer,payDay,own.id);
    await environment.withSecurityRulesDisabled(async c=>updateDoc(doc(c.firestore() as unknown as Firestore,'paymentIntents',renewed.reference),{expiresAt:Timestamp.fromMillis(Date.now()-1000)}));assert.equal((await notify(raw(renewed.reference))).reason,'qr_expired');assert.equal((await getDoc(orderRef)).data()?.paid,false);
   });
+
+  await t.test('multi-dish carts commit atomically, preserve paid portions and transfer name ownership',async()=>{
+   const payer=await client('cart-owner'),other=await client('cart-other'),d='day-2099-03-01';
+   await admin.write({action:'day',create:true,date:'2099-03-01',menu,status:'open'});
+   const cart={action:'order',dayId:d,name:'Người hai món',items:[{dish:menu[0].name,quantity:2},{dish:menu[1].name,quantity:3,note:'Ít sốt'}]};
+   let view=await payer.write(cart);assert.equal(view.orders.length,2);assert.equal(view.orders.reduce((sum,o)=>sum+o.price*o.quantity,0),230000);
+   await assert.rejects(other.write(cart));await assert.rejects(other.write({action:'order',dayId:d,name:cart.name,dish:menu[0].name}));
+   const own=view.orders[0];await assertFails(updateDoc(doc(other.db,'days',d,'orders',own.id),{note:'forged',updatedAt:serverTimestamp()}));
+   await assert.rejects(payer.write({...cart,items:[{dish:menu[0].name,quantity:1},{dish:'missing',quantity:1}]}));assert.equal((await payer.read(d)).orders.length,2);
+   await admin.write({action:'paid',dayId:d,id:own.id,paid:true});
+   view=await payer.write({...cart,items:[{dish:own.dish,quantity:2}]});assert.equal(view.orders.length,3);assert.equal(view.orders.find(o=>o.id===own.id)?.paid,true);
+   const target=await client('cart-google','cart-google'),from=payer.auth.currentUser!.uid,to=target.auth.currentUser!.uid;
+   await setDoc(doc(payer.db,'accountLinks',from),{targetUid:to,createdAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+300000)});await moveGuestOrders(target.db,from,to);
+   view=await target.write({...cart,items:[{dish:menu[0].name,quantity:1}]});assert.ok(view.orders.every(o=>o.actor===to));
+   assert.equal((await getDoc(doc(target.db,'days',d,'orderPeople',await nameId(cart.name)))).data()?.ownerId,to);
+   const raceA=await client('cart-race-a'),raceB=await client('cart-race-b');
+   const outcomes=await Promise.allSettled([raceA.write({...cart,name:'Tên đồng thời'}),raceB.write({...cart,name:'Tên đồng thời'})]);assert.equal(outcomes.filter(o=>o.status==='fulfilled').length,1);
+  });
+  await t.test('grouped payments cover many days, reject stale carts and resume settlement without replaying paid lines',async()=>{
+   const payer=await client('group-owner'),other=await client('group-other'),bot=await client('group-bot'),refs:{dayId:string;orderId:string}[]=[];
+   const bank={bankBin:'970407',bankName:'Techcombank',accountNumber:'00012345678901',accountName:'NGUYEN VAN MAU'};await saveBankAccount(admin,bank);
+   for(let i=1;i<=6;i++){const date='2099-04-'+String(i).padStart(2,'0'),dayId='day-'+date;await admin.write({action:'day',create:true,date,menu,status:'open'});const view=await payer.write({action:'order',dayId,name:'Người thanh toán gộp',items:[{dish:menu[0].name,quantity:2},{dish:menu[1].name,quantity:1}]});refs.push(...view.orders.map(o=>({dayId,orderId:o.id})));}
+   await assert.rejects(requestPaymentGroup(other,refs));
+   let group=await requestPaymentGroup(payer,refs);assert.equal(group.count,12);assert.equal(group.amount,780000);assert.equal((await requestPaymentGroup(payer,refs)).reference,group.reference);
+   const first=refs[0],firstRef=doc(payer.db,'days',first.dayId,'orders',first.orderId),order=(await getDoc(firstRef)).data()!;
+   await assertFails(updateDoc(firstRef,{quantity:3,updatedAt:serverTimestamp()}));await assertFails(updateDoc(doc(payer.db,'paymentGroups',group.reference),{amount:1,updatedAt:serverTimestamp()}));
+   await payer.write({action:'order',dayId:first.dayId,id:first.orderId,name:order.name,dish:order.dish,quantity:3});assert.equal((await getDoc(doc(payer.db,'paymentGroups',group.reference))).data()?.state,'invalid');
+   group=await requestPaymentGroup(payer,refs);assert.equal(group.amount,820000);
+   await bootstrap(PRIMARY_ADMIN_UID);const rootDb=environment.authenticatedContext(PRIMARY_ADMIN_UID,{email:'primary@example.test',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore() as unknown as Firestore;
+   await setDoc(doc(rootDb,'paymentIntegrations',bot.auth.currentUser!.uid),{enabled:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+   await assertFails(updateDoc(doc(bot.db,'paymentGroups',group.reference),{state:'paid',updatedAt:serverTimestamp()}));await assertFails(updateDoc(doc(bot.db,'days',first.dayId,'orders',first.orderId),{paid:true,updatedAt:serverTimestamp()}));
+   const secret='g'.repeat(64),env={NODE_ENV:'test',NEXT_PUBLIC_FIREBASE_PROJECT_ID:project,NEXT_PUBLIC_FIREBASE_API_KEY:'fake-api-key',PAYMENT_WEBHOOK_SECRET:secret,PAYMENT_FIREBASE_REFRESH_TOKEN:bot.auth.currentUser!.refreshToken,FIRESTORE_EMULATOR_HOST:process.env.FIRESTORE_EMULATOR_HOST,FIREBASE_AUTH_EMULATOR_HOST:process.env.FIREBASE_AUTH_EMULATOR_HOST};
+   const raw=(amount=group.amount)=>'+ VND '+amount.toLocaleString('en-US')+'\nAccount: '+bank.accountNumber+'\nBalance: VND 900,000\n'+group.reference;
+   async function notify(text=raw()){const response=await bankWebhook(new Request('https://example.test/api/payments/bank-notification',{method:'POST',headers:{Authorization:'Bearer '+secret,'Content-Type':'text/plain'},body:text}),env);return {http:response.status,...await response.json()};}
+   assert.equal((await notify(raw(group.amount+1000))).reason,'amount_mismatch');
+   const originalFetch=globalThis.fetch;let failed=false;
+   globalThis.fetch=async(input,init)=>{if(!failed&&String(input).endsWith(':commit')&&String(init?.body).includes('paymentGroupSettlements')){failed=true;throw new Error('Injected transport failure');}return originalFetch(input,init);};
+   try{assert.equal((await notify()).http,503);}finally{globalThis.fetch=originalFetch;}
+   assert.equal((await getDoc(doc(payer.db,'paymentGroups',group.reference))).data()?.state,'paid');
+   const blocked=await resumeGroupPayment(new Request('https://example.test/resume',{method:'POST',headers:{Authorization:'Bearer '+await other.auth.currentUser!.getIdToken()}}),group.reference,env);assert.equal(blocked.status,403);
+   const recovered=await resumeGroupPayment(new Request('https://example.test/resume',{method:'POST',headers:{Authorization:'Bearer '+await payer.auth.currentUser!.getIdToken()}}),group.reference,env);assert.equal(recovered.status,200);assert.equal((await recovered.json()).status,'paid');
+   const outcome=await notify();assert.equal(outcome.status,'duplicate');for(const ref of refs)assert.equal((await getDoc(doc(payer.db,'days',ref.dayId,'orders',ref.orderId))).data()?.paid,true);
+   assert.equal((await getDocs(collection(payer.db,'paymentGroupSettlements',group.reference,'items'))).size,12);
+   await admin.write({action:'paid',dayId:first.dayId,id:first.orderId,paid:false});assert.equal((await notify()).status,'duplicate');assert.equal((await getDoc(firstRef)).data()?.paid,false);
+   await assertFails(deleteDoc(doc(bot.db,'paymentGroupSettlements',group.reference,'items',group.items[0].key)));
+  });
+
+
+  await t.test('restaurant links reveal only a snapshot, require admin creation and stop working after revocation or expiry',async()=>{
+   const dayId='day-2099-03-01',view=await admin.read(dayId),summary=restaurantSummary(view.day.date,view.orders),share=await createRestaurantShare(admin,dayId,summary);
+   const publicDb=environment.unauthenticatedContext().firestore() as unknown as Firestore,ref=doc(publicDb,'restaurantShares',share.token);
+   const data=(await getDoc(ref)).data()!;assert.deepEqual(JSON.parse(data.payload),summary);assert.equal(data.payload.includes('Người hai món'),false);await assertFails(getDocs(collection(publicDb,'restaurantShares')));
+   await assert.rejects(createRestaurantShare(a,dayId,summary));await assertFails(updateDoc(doc(a.db,'restaurantShares',share.token),{active:false}));
+   await assertFails(updateDoc(doc(admin.db,'restaurantShares',share.token),{payload:'changed'}));
+   await revokeRestaurantShare(admin,share.token);await assertFails(getDoc(ref));
+   const expired=await createRestaurantShare(admin,dayId,summary);await environment.withSecurityRulesDisabled(async c=>updateDoc(doc(c.firestore() as unknown as Firestore,'restaurantShares',expired.token),{createdAt:Timestamp.fromMillis(Date.now()-8*86400000),expiresAt:Timestamp.fromMillis(Date.now()-86400000)}));await assertFails(getDoc(doc(publicDb,'restaurantShares',expired.token)));
+  });
+
+
+  await t.test('ten-line carts can update previously linked QRs without exceeding Rules access limits',async()=>{
+   const payer=await client('cart-budget'),date='2099-05-01',dayId='day-'+date,largeMenu=Array.from({length:10},(_,i)=>({name:'Món số '+(i+1),price:40000}));
+   await admin.write({action:'day',create:true,date,menu:largeMenu,status:'open'});
+   const body={action:'order',dayId,name:'Giỏ mười món',items:largeMenu.map(m=>({dish:m.name,quantity:1}))};
+   const placed=await payer.write(body);assert.equal(placed.orders.length,10);
+   for(const order of placed.orders)await requestPayment(payer,dayId,order.id);
+   const changed=await payer.write(body);assert.ok(changed.orders.every(o=>o.quantity===2));assert.equal(changed.orders.length,10);
+  });
+
+
+  await t.test('paid edits collect only differences and cancelled meals retain admin-confirmed refund history',async()=>{
+   const payer=await client('finance-payer'),other=await client('finance-other'),bot=await client('finance-bot'),dayId='day-2099-06-01',name='Đối soát mẫu';
+   const menu=[{name:'Món bốn mươi',price:40000},{name:'Món năm mươi',price:50000},{name:'Món sáu mươi',price:60000}];
+   await admin.write({action:'day',create:true,date:'2099-06-01',menu,status:'open'});
+   const placed=await payer.write({action:'order',dayId,name,dish:menu[1].name}),id=placed.orders[0].id,ref=doc(payer.db,'days',dayId,'orders',id);
+   const read=async()=>orderFinance((await getDoc(ref)).data() as never);
+   await admin.write({action:'paid',dayId,id,paid:true});assert.equal((await read()).receivedAmount,50000);
+   await payer.write({action:'order',dayId,id,name,dish:menu[2].name});assert.equal((await read()).due,10000);assert.equal((await read()).receivedAmount,50000);
+   for(const fields of [{receivedAmount:60000,paid:true},{receivedAmount:0},{refundedAmount:50000},{voidedAmount:50000},{paid:true}])await assertFails(updateDoc(ref,{...fields,updatedAt:serverTimestamp()}));
+   const bank={bankBin:'970407',bankName:'Techcombank',accountNumber:'00012345678901',accountName:'NGUYEN VAN MAU'};await saveBankAccount(admin,bank);
+   const single=await requestPayment(payer,dayId,id);assert.equal(single.amount,10000);
+   await bootstrap(PRIMARY_ADMIN_UID);const rootDb=environment.authenticatedContext(PRIMARY_ADMIN_UID,{email:'primary@example.test',email_verified:true,firebase:{sign_in_provider:'google.com'}}).firestore() as unknown as Firestore;
+   await setDoc(doc(rootDb,'paymentIntegrations',bot.auth.currentUser!.uid),{enabled:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+   const secret='f'.repeat(64),env={NODE_ENV:'test',NEXT_PUBLIC_FIREBASE_PROJECT_ID:project,NEXT_PUBLIC_FIREBASE_API_KEY:'fake-api-key',PAYMENT_WEBHOOK_SECRET:secret,PAYMENT_FIREBASE_REFRESH_TOKEN:bot.auth.currentUser!.refreshToken,FIRESTORE_EMULATOR_HOST:process.env.FIRESTORE_EMULATOR_HOST,FIREBASE_AUTH_EMULATOR_HOST:process.env.FIREBASE_AUTH_EMULATOR_HOST};
+   async function notify(reference:string,amount:number){const response=await bankWebhook(new Request('https://example.test/api/payments/bank-notification',{method:'POST',headers:{Authorization:'Bearer '+secret,'Content-Type':'text/plain'},body:'+ VND '+amount.toLocaleString('en-US')+'\nAccount: '+bank.accountNumber+'\nBalance: VND 900,000\n'+reference}),env);return {http:response.status,...await response.json()};}
+   assert.equal((await notify(single.reference,60000)).reason,'amount_mismatch');assert.equal((await notify(single.reference,10000)).status,'paid');assert.equal((await read()).receivedAmount,60000);assert.equal((await read()).due,0);
+   await payer.write({action:'order',dayId,id,name,dish:menu[0].name});assert.equal((await read()).refundDue,20000);assert.equal((await getDoc(ref)).data()?.paid,true);await assert.rejects(requestPayment(payer,dayId,id));
+   await assert.rejects(payer.write({action:'refund',dayId,id,amount:20000}));await assert.rejects(other.write({action:'refund',dayId,id,amount:20000}));await assert.rejects(admin.write({action:'refund',dayId,id,amount:1}));
+   await assertFails(updateDoc(doc(admin.db,'days',dayId,'orders',id),{refundedAmount:20000,updatedAt:serverTimestamp()}));
+   const refunded=await Promise.allSettled([admin.write({action:'refund',dayId,id,amount:20000}),admin.write({action:'refund',dayId,id,amount:20000})]);assert.equal(refunded.filter(r=>r.status==='fulfilled').length,1);assert.equal((await read()).refundedAmount,20000);assert.equal((await read()).refundDue,0);
+   await payer.write({action:'order',dayId,id,name,dish:menu[1].name});assert.equal((await read()).due,10000);
+   const group=await requestPaymentGroup(payer,[{dayId,orderId:id}]);assert.equal(group.amount,10000);assert.equal((await notify(group.reference,10000)).status,'paid');assert.equal((await read()).receivedAmount,70000);assert.equal((await read()).refundedAmount,20000);
+   const cancelled=await payer.write({action:'cancel',dayId,id});assert.equal(cancelled.orders.length,0);assert.equal(cancelled.cancelledOrders?.[0].id,id);assert.equal((await read()).refundDue,50000);await assert.rejects(requestPaymentGroup(payer,[{dayId,orderId:id}]));
+   const stats=(await payer.statistics()).find(o=>o.dayId===dayId&&o.name===name)!;assert.equal(stats.amount,0);assert.equal(stats.refundDue,50000);assert.equal(stats.appliedAmount,0);
+   await admin.write({action:'refund',dayId,id,amount:50000});assert.equal((await read()).receivedAmount,70000);assert.equal((await read()).refundedAmount,70000);assert.equal((await read()).refundDue,0);
+   const events=await getDocs(collection(payer.db,'days',dayId,'orders',id,'financialEvents'));assert.equal(events.size,3);for(const e of events.docs){await assertFails(updateDoc(e.ref,{kind:'hacked'}));await assertFails(deleteDoc(e.ref));}
+   assert.equal((await notify(single.reference,10000)).status,'duplicate');assert.equal((await read()).refundedAmount,70000);
+  });
+  await t.test('legacy paid checkboxes become preserved opening balances and cancelled credit slots are not overwritten',async()=>{
+   const payer=await client('legacy-balance'),dayId='day-2099-07-01',name='Số dư cũ',id=await nameId(name);
+   await admin.write({action:'day',create:true,date:'2099-07-01',menu,status:'open'});
+   await environment.withSecurityRulesDisabled(async c=>setDoc(doc(c.firestore() as unknown as Firestore,'days',dayId,'orders',id),{name,ownerId:payer.auth.currentUser!.uid,dish:menu[1].name,dishId:await nameId(menu[1].name),price:50000,quantity:1,note:'',paid:true,cancelled:false,createdAt:Timestamp.now(),updatedAt:Timestamp.now()}));
+   await payer.write({action:'order',dayId,id,name,dish:menu[0].name,quantity:2});let old=(await getDoc(doc(payer.db,'days',dayId,'orders',id))).data()!;assert.equal(old.receivedAmount,50000);assert.equal(orderFinance(old as never).due,30000);
+   await payer.write({action:'cancel',dayId,id});assert.equal(orderFinance((await getDoc(doc(payer.db,'days',dayId,'orders',id))).data() as never).refundDue,50000);
+   const placed=await payer.write({action:'order',dayId,name,items:[{dish:menu[0].name,quantity:1}]});assert.notEqual(placed.orders[0].id,id);assert.equal(placed.cancelledOrders?.find(o=>o.id===id)?.receivedAmount,50000);
+  });
+
  }finally{const coverage=await fetch(`http://${host}:${port}/emulator/v1/projects/${project}:ruleCoverage`);fs.mkdirSync('.firebase',{recursive:true});fs.writeFileSync('.firebase/rules-coverage.json',await coverage.text());await Promise.all(databases.map(db=>terminate(db)));await Promise.all(apps.map(app=>deleteApp(app)));await environment.cleanup();}
 });

@@ -1,3 +1,4 @@
+import {orderFinance,moneyFields,financiallyPaid} from './order-finance';
 import type {Auth} from 'firebase/auth';
 import {collection,doc,getDoc,getDocs,query,where,orderBy,limit,runTransaction,writeBatch,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
 import {ensureUser,firebaseClient} from './firebase-client';
@@ -7,6 +8,8 @@ import {mealSession,type StatisticsOrder} from './statistics';
 import {ownAccess,syncUserProfile} from './user-management';
 import {rememberOrderName} from './order-name';
 import {isBankAccount} from './payment-model';
+import {placeOrderCart} from './order-cart';
+import {invalidateLinkedGroup} from './payment-group-client';
 
 export class MealClient{
  constructor(public auth:Auth,public db:Firestore,private source:Workspace){}
@@ -20,10 +23,10 @@ export class MealClient{
     const data=day.data();if(!validDate(data.date))throw new Error('Có ngày đặt cơm chưa hợp lệ. Vui lòng kiểm tra lại.');
     const ref=collection(this.db,'days',day.id,'orders');
     const orders=await getDocs(ref);
-    return orders.docs.filter(o=>!o.data().cancelled).map(o=>{
-     const value=o.data(),amount=value.price*value.quantity;
-     if(!Number.isSafeInteger(amount)||amount<=0||typeof value.paid!=='boolean')throw new Error('Có đơn chưa đủ thông tin số tiền hoặc thanh toán.');
-     return {id:'web:'+day.id+':'+o.id,dayId:day.id,date:data.date,session:mealSession(data.label||''),name:value.name,dish:value.dish,quantity:value.quantity,amount,paid:value.paid,source:'web' as const};
+    return orders.docs.filter(o=>!o.data().cancelled||orderFinance(o.data() as never).receivedAmount>0).map(o=>{
+     const value=o.data(),finance=orderFinance(value as never),amount=finance.total;
+     if(!Number.isSafeInteger(amount)||amount<0||typeof value.paid!=='boolean')throw new Error('Có đơn chưa đủ thông tin số tiền hoặc thanh toán.');
+     return {id:'web:'+day.id+':'+o.id,orderId:o.id,ownerId:value.ownerId,dayId:day.id,date:data.date,session:mealSession(data.label||''),name:value.name,dish:value.dish,quantity:value.quantity,amount,receivedAmount:finance.receivedAmount,refundedAmount:finance.refundedAmount,voidedAmount:finance.voidedAmount,refundDue:finance.refundDue,appliedAmount:finance.applied,cancelled:value.cancelled,paid:value.paid,source:'web' as const};
     });
    }));
    for(const group of groups)records.push(...group);
@@ -40,21 +43,22 @@ export class MealClient{
   for(const d of list)days.set(d.id,d);
   const selected=selectMealDay(list,dayId,now);
   const published=daysSnapshot.docs.some(d=>d.id===selected.id);
-  let day=selected,orders:Order[]=[];
+  let day=selected,orders:Order[]=[],cancelledOrders:Order[]=[];
   if(published){
    const ordersRef=collection(this.db,'days',day.id,'orders');
    const [menu,orderSnapshot]=await Promise.all([getDocs(query(collection(this.db,'days',day.id,'dishes'),where('active','==',true))),getDocs(ordersRef)]);
    day={...day,menu:menu.docs.map(d=>({name:d.data().name as string,price:d.data().price as number}))};days.set(day.id,day);
-   orders=orderSnapshot.docs.filter(d=>!d.data().cancelled).map(d=>{const o=d.data();return {id:d.id,dayId:day.id,name:o.name,dish:o.dish,price:o.price,quantity:o.quantity,note:o.note,paid:o.paid,cancelled:o.cancelled,actor:o.ownerId,updatedAt:o.updatedAt?.toDate().toISOString()||'',canEdit:admin||o.ownerId===user.uid};});
+   const allOrders=orderSnapshot.docs.map(d=>{const o=d.data();return {id:d.id,dayId:day.id,name:o.name,dish:o.dish,price:o.price,quantity:o.quantity,note:o.note,paid:o.paid,...moneyFields(o as never),cancelled:o.cancelled,actor:o.ownerId,updatedAt:o.updatedAt?.toDate().toISOString()||'',canEdit:admin||o.ownerId===user.uid};});orders=allOrders.filter(o=>!o.cancelled);cancelledOrders=allOrders.filter(o=>o.cancelled);
   }
   const qr=payment.data()?.qrUrl;
-  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
+  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,cancelledOrders,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
  }
  async write(body:Record<string,unknown>){
   const user=await ensureUser(this.auth),admin=await this.isAdmin();
   if(body.action==='order'&&await ownAccess(this))throw new Error('Tài khoản này đang tạm khóa đặt cơm. Vui lòng liên hệ quản trị viên.');
   const id=body.action==='day'&&body.create?`day-${String(body.date)}`:String(body.dayId||'');
   if(!/^[\w-]{1,100}$/.test(id))throw new Error('Không tìm thấy ngày đặt cơm.');
+  if(body.action==='order'&&body.items){const saved=await placeOrderCart(this,id,body.name,body.items);rememberOrderName(saved);await syncUserProfile(this,saved).catch(()=>{});return this.read(id);}
   if(body.action==='day'){
    if(!admin)throw new Error('Chỉ người quản lý được sửa thực đơn.');
    const current=await getDoc(doc(this.db,'days',id)),fallback=this.source.days.find(d=>d.id===id);
@@ -75,21 +79,30 @@ export class MealClient{
    if(!daySnapshot.exists())throw new Error('Thực đơn chưa được người quản lý đăng.');
    const config=daySnapshot.data(),old=existing.data();
    if(old&&old.ownerId!==user.uid&&!admin)throw new Error('Bạn chỉ được sửa đơn của mình.');
-   if(body.action==='paid'){
-    if(!admin||!existing.exists())throw new Error('Chỉ người quản lý được xác nhận thanh toán.');
-    tx.update(orderRef,{paid:body.paid===true,updatedAt:serverTimestamp()});return;
+   if(body.action==='paid'||body.action==='refund'){
+    if(!admin||!existing.exists())throw new Error('Chỉ quản trị viên được xác nhận thanh toán hoặc hoàn tiền.');
+    const f=orderFinance(old as never),fields=moneyFields(old as never),eventId=crypto.randomUUID().replace(/-/g,'');
+    const kind=body.action==='refund'?'refund':body.paid===true?'receive':'void';
+    if(kind==='refund'){if(f.refundDue<=0||Number(body.amount)!==f.refundDue)throw new Error('Khoản cần hoàn vừa thay đổi. Vui lòng tải lại.');fields.refundedAmount+=f.refundDue;}
+    else if(kind==='receive'){if(old!.cancelled||f.due<=0)throw new Error('Đơn không còn khoản cần thu.');fields.receivedAmount+=f.due;}
+    else {if(old!.cancelled||f.held<=0)throw new Error('Đơn chưa có khoản xác nhận để bỏ.');fields.voidedAmount+=f.held;}
+    const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();
+    const paid=financiallyPaid({...old,...fields} as never);
+    tx.set(doc(this.db,'days',id,'orders',orderId,'financialEvents',eventId),{kind,createdBy:user.uid,createdAt:serverTimestamp(),beforeReceived:f.receivedAmount,beforeRefunded:f.refundedAmount,beforeVoided:f.voidedAmount,afterReceived:fields.receivedAmount,afterRefunded:fields.refundedAmount,afterVoided:fields.voidedAmount});
+    tx.update(orderRef,{...fields,paid,paymentEventId:eventId,updatedAt:serverTimestamp()});return;
    }
    if(isLocked({id,date:config.date,label:config.label,status:config.status,menu:[],source:false}))throw new Error('Đã chốt cơm. Cần mở lại ngày trước khi thay đổi đơn.');
    if(body.action==='cancel'){
-    if(!existing.exists())throw new Error('Không tìm thấy đơn cơm.');tx.update(orderRef,{cancelled:true,paid:false,updatedAt:serverTimestamp()});return;
+    if(!existing.exists())throw new Error('Không tìm thấy đơn cơm.');const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();tx.update(orderRef,{...moneyFields(old as never),cancelled:true,paid:false,updatedAt:serverTimestamp()});return;
    }
    if(body.action!=='order')throw new Error('Thao tác không hợp lệ.');
    const dishName=cleanName(body.dish),dishId=await nameId(dishName),dish=await tx.get(doc(this.db,'days',id,'dishes',dishId));
    const quantity=Number(body.quantity??1),note=String(body.note||'').trim();
    if(!name||name.length>100||note.length>300||!Number.isInteger(quantity)||quantity<1||quantity>30||!dish.exists()||!dish.data().active)throw new Error('Kiểm tra tên, món, số lượng (1–30) và ghi chú (tối đa 300 ký tự).');
    const price=old?.dishId===dishId?old.price:dish.data().price;
-   const paid=old&&!old.cancelled&&old.dishId===dishId&&old.quantity===quantity&&old.price===price?old.paid:false;
-   tx.set(orderRef,{name:old?.name||name,dish:dish.data().name,dishId,price,quantity,note,paid,cancelled:false,ownerId:old?.ownerId||user.uid,createdAt:old?.createdAt||serverTimestamp(),updatedAt:serverTimestamp()});
+   const finance=old?moneyFields(old as never):{receivedAmount:0,refundedAmount:0,voidedAmount:0},paid=financiallyPaid({price,quantity,paid:false,...finance});
+   if(existing.exists()){const apply=await invalidateLinkedGroup(this,tx,id,orderId);apply();}
+   tx.set(orderRef,{name:old?.name||name,dish:dish.data().name,dishId,price,quantity,note,paid,...finance,...(old?.paymentEventId?{paymentEventId:old.paymentEventId}:{}),cancelled:false,ownerId:old?.ownerId||user.uid,createdAt:old?.createdAt||serverTimestamp(),updatedAt:serverTimestamp()});
    return !old||old.ownerId===user.uid?old?.name||name:undefined;
   });}catch(error){if((error as {code?:string}).code==='permission-denied'&&!body.id&&body.action==='order')throw new Error('Tên này đã có đơn trong ngày, hoặc chưa được cấp quyền đặt cơm. Hãy sửa đơn cũ hoặc liên hệ người gom cơm.');throw error;}
   if(savedName){rememberOrderName(savedName);await syncUserProfile(this,savedName).catch(()=>{});}

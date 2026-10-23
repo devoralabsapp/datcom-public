@@ -1,14 +1,18 @@
 import {GoogleAuthProvider,linkWithPopup,signInWithCredential,signOut,setPersistence,inMemoryPersistence,getAuth,connectAuthEmulator,type AuthError} from 'firebase/auth';
 import {deleteApp,initializeApp} from 'firebase/app';
-import {collection,doc,getDocs,query,where,setDoc,deleteDoc,writeBatch,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
+import {collection,doc,getDoc,getDocs,query,where,setDoc,deleteDoc,runTransaction,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
 import {ensureUser,firebaseClient} from './firebase-client';
+import {invalidateLinkedGroup} from './payment-group-client';
+import type {MealClient} from './meal-client';
 
 const pendingKey='com-nha:transfer:v2';
 export async function moveGuestOrders(db:Firestore,sourceUid:string,targetUid:string){
  const days=await getDocs(collection(db,'days'));
  for(let i=0;i<days.docs.length;i+=8){await Promise.all(days.docs.slice(i,i+8).map(async day=>{
   const orders=await getDocs(query(collection(db,'days',day.id,'orders'),where('ownerId','==',sourceUid)));
-  for(let j=0;j<orders.docs.length;j+=20){const batch=writeBatch(db);for(const order of orders.docs.slice(j,j+20))batch.update(order.ref,{ownerId:targetUid,updatedAt:serverTimestamp()});await batch.commit();}
+  for(const order of orders.docs)await runTransaction(db,async tx=>{const current=await tx.get(order.ref);if(current.data()?.ownerId!==sourceUid)return;const apply=await invalidateLinkedGroup({db} as MealClient,tx,day.id,order.id);apply();tx.update(order.ref,{ownerId:targetUid,updatedAt:serverTimestamp()});});
+  const people=await getDocs(query(collection(db,'days',day.id,'orderPeople'),where('ownerId','==',sourceUid)));
+  for(const person of people.docs)await runTransaction(db,async tx=>{const current=await tx.get(person.ref);if(current.data()?.ownerId===sourceUid)tx.update(person.ref,{ownerId:targetUid,updatedAt:serverTimestamp()});});
  }));}
  await deleteDoc(doc(db,'accountLinks',sourceUid));
 }

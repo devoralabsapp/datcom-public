@@ -53,11 +53,42 @@ service cloud.firestore {
   }
   function validOrder(d,orderId){
    return d.keys().hasAll(['name','ownerId','dishId','dish','price','quantity','note','paid','cancelled','createdAt','updatedAt'])
-    && d.keys().hasOnly(['name','ownerId','dishId','dish','price','quantity','note','paid','cancelled','createdAt','updatedAt'])
-    && validText(d.name,100) && orderId == hash(d.name) && d.ownerId is string && d.ownerId.size()>0 && d.ownerId.size()<=128
+    && d.keys().hasOnly(['name','ownerId','dishId','dish','price','quantity','note','paid','cancelled','createdAt','updatedAt','receivedAmount','refundedAmount','voidedAmount','paymentEventId']) && validMoney(d)
+    && validText(d.name,100) && orderId.matches('^'+hash(d.name)+'(_([1-9]|[12][0-9]|30))?$') && d.ownerId is string && d.ownerId.size()>0 && d.ownerId.size()<=128
     && d.dishId is string && d.dishId.matches('^[a-f0-9]{64}$') && validText(d.dish,160) && d.price is int && d.price>=1000 && d.price<=1000000
     && d.quantity is int && d.quantity>=1 && d.quantity<=30 && d.note is string && d.note.size()<=300 && d.paid is bool && d.cancelled is bool
     && d.createdAt is timestamp && d.updatedAt == request.time;
+  }
+  function received(d){return d.get('receivedAmount',d.paid?d.price*d.quantity:0);}
+  function refunded(d){return d.get('refundedAmount',0);}
+  function voided(d){return d.get('voidedAmount',0);}
+  function held(d){return received(d)-refunded(d)-voided(d);}
+  function owed(d){return d.cancelled?0:d.price*d.quantity;}
+  function due(d){return owed(d)>held(d)?owed(d)-held(d):0;}
+  function refundDue(d){return held(d)>owed(d)?held(d)-owed(d):0;}
+  function validMoney(d){let r=received(d);let f=refunded(d);let v=voided(d);let e=d.get('paymentEventId','');return r is int && r>=0 && r<=1000000000 && f is int && f>=0 && v is int && v>=0 && r-f-v>=0 && e is string && e.size()<=32;}
+  function derivedPaid(d){return d.paid==(!d.cancelled && due(d)==0);}
+  function moneyUnchanged(a,b){return received(a)==received(b) && refunded(a)==refunded(b) && voided(a)==voided(b);}
+  function bankMoney(d,amount){return received(d)==received(resource.data)+amount && refunded(d)==refunded(resource.data) && voided(d)==voided(resource.data) && derivedPaid(d);}
+  function financialEvent(dayId,orderId,d){
+   let id=d.get('paymentEventId','');
+   let path=/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)/financialEvents/$(id);
+   let e=getAfter(path).data;
+   let r=received(resource.data);let f=refunded(resource.data);let v=voided(resource.data);
+   let nr=received(d);let nf=refunded(d);let nv=voided(d);
+   let amount=owed(resource.data)-r+f+v;
+   return id.matches('^[a-f0-9]{32}$') && !exists(path) && e.createdAt==request.time && e.createdBy==request.auth.uid
+    && e.beforeReceived==r && e.beforeRefunded==f && e.beforeVoided==v
+    && e.afterReceived==nr && e.afterRefunded==nf && e.afterVoided==nv
+    && derivedPaid(d) && d.diff(resource.data).affectedKeys().hasOnly(['paid','receivedAmount','refundedAmount','voidedAmount','paymentEventId','updatedAt'])
+    && ((e.kind=='receive' && !resource.data.cancelled && amount>0 && nr==r+amount && nf==f && nv==v)
+     || (e.kind=='void' && !resource.data.cancelled && r-f-v>0 && nv==r-f && nr==r && nf==f)
+     || (e.kind=='refund' && amount<0 && nf==f-amount && nr==r && nv==v));
+  }
+  match /days/{dayId}/orders/{orderId}/financialEvents/{eventId}{
+   allow read: if signedIn();
+   allow create: if admin() && eventId.matches('^[a-f0-9]{32}$') && request.resource.data.keys().hasAll(['kind','createdBy','createdAt','beforeReceived','beforeRefunded','beforeVoided','afterReceived','afterRefunded','afterVoided']) && request.resource.data.keys().hasOnly(['kind','createdBy','createdAt','beforeReceived','beforeRefunded','beforeVoided','afterReceived','afterRefunded','afterVoided']) && request.resource.data.createdAt==request.time && request.resource.data.createdBy==request.auth.uid && getAfter(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.paymentEventId==eventId && getAfter(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.updatedAt==request.time;
+   allow update,delete: if false;
   }
   function menuPrice(dayId,d){
    let item=get(/databases/$(database)/documents/days/$(dayId)/dishes/$(d.dishId)).data;
@@ -70,7 +101,7 @@ service cloud.firestore {
   }
   function ownOrder(){return signedIn() && resource.data.ownerId == request.auth.uid;}
   function parentExists(dayId){return exists(/databases/$(database)/documents/days/$(dayId));}
-  function correctPayment(d){return (samePrice(d) && d.quantity == resource.data.quantity && d.cancelled == resource.data.cancelled && !resource.data.cancelled) ? d.paid == resource.data.paid : d.paid == false;}
+  function correctPayment(d){return moneyUnchanged(d,resource.data) && derivedPaid(d);}
   function validLink(d,sourceUid){
    return d.keys().hasAll(['targetUid','createdAt','expiresAt']) && d.keys().hasOnly(['targetUid','createdAt','expiresAt'])
     && signedIn() && sourceUid == request.auth.uid && request.auth.token.firebase.sign_in_provider == 'anonymous'
@@ -158,21 +189,21 @@ service cloud.firestore {
   function validBankPayment(d){return d.keys().hasAll(['bankBin','bankName','accountNumber','accountName','updatedAt']) && d.keys().hasOnly(['bankBin','bankName','accountNumber','accountName','updatedAt']) && bankFields(d) && d.updatedAt==request.time;}
   function paymentCode(code){return code is string && code.matches('^COM[A-F0-9]{20}$');}
   function paymentBot(){return signedIn() && request.auth.token.firebase.sign_in_provider=='anonymous' && exists(/databases/$(database)/documents/paymentIntegrations/$(request.auth.uid)) && get(/databases/$(database)/documents/paymentIntegrations/$(request.auth.uid)).data.enabled==true;}
-  function paymentOrderAccess(dayId,orderId){return signedIn() && (get(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.ownerId==request.auth.uid || admin() || paymentBot());}
+  function paymentOrderAccess(dayId,orderId){return signedIn() && (get(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.ownerId==request.auth.uid || recipient(get(/databases/$(database)/documents/days/$(dayId)/orders/$(orderId)).data.ownerId) || admin() || paymentBot());}
   // Immutable intent: account + exact current order snapshot, at most 24h.
   function validPaymentIntent(d,code){
    let o=get(/databases/$(database)/documents/days/$(d.dayId)/orders/$(d.orderId)).data;
    let bank=get(/databases/$(database)/documents/settings/payment).data;
    return d.keys().hasAll(['bankBin','bankName','accountNumber','accountName','reference','dayId','orderId','ownerId','requestedBy','name','amount','dishId','price','quantity','description','orderCreatedAt','bankConfigUpdatedAt','createdAt','expiresAt'])
     && d.keys().hasOnly(['bankBin','bankName','accountNumber','accountName','reference','dayId','orderId','ownerId','requestedBy','name','amount','dishId','price','quantity','description','orderCreatedAt','bankConfigUpdatedAt','createdAt','expiresAt'])
-    && paymentCode(code) && d.reference==code && d.dayId is string && d.dayId.matches('^[A-Za-z0-9_-]{1,100}$') && d.orderId is string && d.orderId.matches('^[a-f0-9]{64}$')
+    && !exists(/databases/$(database)/documents/paymentGroups/$(code)) && paymentCode(code) && d.reference==code && d.dayId is string && d.dayId.matches('^[A-Za-z0-9_-]{1,100}$') && d.orderId is string && d.orderId.matches('^[a-f0-9]{64}(_([1-9]|[12][0-9]|30))?$')
     && (o.ownerId==request.auth.uid || admin()) && d.requestedBy==request.auth.uid && validUid(d.requestedBy) && validUid(d.ownerId) && d.ownerId==o.ownerId && validText(d.name,100) && d.name==o.name
-    && o.paid==false && o.cancelled==false && d.orderCreatedAt==o.createdAt && d.dishId==o.dishId && d.price==o.price && d.quantity==o.quantity && d.amount is int && d.amount==o.price*o.quantity
+    && o.paid==false && o.cancelled==false && d.orderCreatedAt==o.createdAt && d.dishId==o.dishId && d.price==o.price && d.quantity==o.quantity && d.amount is int && d.amount==due(o)
     && bankFields(d) && d.bankBin==bank.bankBin && d.bankName==bank.bankName && d.accountNumber==bank.accountNumber && d.accountName==bank.accountName && d.bankConfigUpdatedAt==bank.updatedAt
     && validText(d.description,50) && d.description.matches('.*'+code+'.*') && d.createdAt==request.time && d.expiresAt is timestamp && d.expiresAt>request.time && d.expiresAt<=request.time+duration.value(1,'d')
     && getAfter(/databases/$(database)/documents/paymentLinks/$(d.dayId)/orders/$(d.orderId)).data.reference==code;
   }
-  function validPaymentLink(d,dayId,orderId){
+  function validSinglePaymentLink(d,dayId,orderId){
    let intent=getAfter(/databases/$(database)/documents/paymentIntents/$(d.reference)).data;
    return d.keys().hasAll(['reference','updatedAt']) && d.keys().hasOnly(['reference','updatedAt']) && paymentCode(d.reference) && d.updatedAt==request.time && intent.dayId==dayId && intent.orderId==orderId && intent.createdAt==request.time;
   }
@@ -184,7 +215,7 @@ service cloud.firestore {
    return d.keys().hasAll(['reference','transactionKey','transactionId','amount','bankBin','accountNumber','occurredAt','notificationHash','createdBy','createdAt']) && d.keys().hasOnly(['reference','transactionKey','transactionId','amount','bankBin','accountNumber','occurredAt','notificationHash','createdBy','createdAt'])
     && paymentCode(code) && d.reference==code && d.createdBy==request.auth.uid && d.createdAt==request.time && d.transactionId is string && d.transactionId.matches('^[A-Za-z0-9._/-]{1,120}$')
     && d.transactionKey==hash(d.bankBin+'|'+d.accountNumber+'|'+d.transactionId) && d.notificationHash is string && d.notificationHash.matches('^[a-f0-9]{64}$')
-    && d.amount is int && d.amount==intent.amount && d.amount==o.price*o.quantity && d.bankBin==intent.bankBin && d.accountNumber==intent.accountNumber
+    && d.amount is int && d.amount==intent.amount && d.amount==due(o) && d.bankBin==intent.bankBin && d.accountNumber==intent.accountNumber
     && bank.bankBin==intent.bankBin && bank.accountNumber==intent.accountNumber && bank.updatedAt==intent.bankConfigUpdatedAt
     && intent.expiresAt>request.time && o.paid==false && o.cancelled==false && o.ownerId==intent.ownerId && o.createdAt==intent.orderCreatedAt && o.dishId==intent.dishId && o.price==intent.price && o.quantity==intent.quantity
     && d.occurredAt is timestamp && d.occurredAt>=intent.createdAt-duration.value(2,'m') && d.occurredAt<=request.time+duration.value(5,'m') && d.occurredAt<=intent.expiresAt
@@ -195,16 +226,117 @@ service cloud.firestore {
   function webhookPayment(dayId,orderId,d){
    let code=get(/databases/$(database)/documents/paymentLinks/$(dayId)/orders/$(orderId)).data.reference;
    let receipt=getAfter(/databases/$(database)/documents/paymentReceipts/$(code)).data;
-   return paymentBot() && resource.data.paid==false && resource.data.cancelled==false && d.paid==true && d.diff(resource.data).affectedKeys().hasOnly(['paid','updatedAt'])
-    && !exists(/databases/$(database)/documents/paymentReceipts/$(code)) && receipt.reference==code && receipt.createdAt==request.time && receipt.createdBy==request.auth.uid && receipt.amount==resource.data.price*resource.data.quantity;
+   return paymentBot() && resource.data.paid==false && resource.data.cancelled==false && d.paid==true && d.diff(resource.data).affectedKeys().hasOnly(['paid','receivedAmount','refundedAmount','voidedAmount','updatedAt'])
+    && bankMoney(d,receipt.amount) && !exists(/databases/$(database)/documents/paymentReceipts/$(code)) && receipt.reference==code && receipt.createdAt==request.time && receipt.createdBy==request.auth.uid && receipt.amount==due(resource.data);
   }
+
+  // Multi-line names are claimed once per day; legacy hash-only orders remain valid.
+  function validPerson(d,id){return d.keys().hasAll(['name','ownerId','createdAt','updatedAt']) && d.keys().hasOnly(['name','ownerId','createdAt','updatedAt']) && validText(d.name,100) && id==hash(d.name) && validUid(d.ownerId) && d.createdAt is timestamp && d.updatedAt==request.time;}
+  function personOrderAccess(dayId,orderId,d){
+   let person=/databases/$(database)/documents/days/$(dayId)/orderPeople/$(hash(d.name));
+   return (orderId==hash(d.name) && !existsAfter(person)) || (existsAfter(person) && getAfter(person).data.ownerId==d.ownerId);
+  }
+  match /days/{dayId}/orderPeople/{id}{
+   allow read: if signedIn() && parentExists(dayId);
+   allow create: if signedIn() && activeUser() && validPerson(request.resource.data,id) && request.resource.data.createdAt==request.time && openDay(dayId)
+    && (request.resource.data.ownerId==request.auth.uid || admin())
+    && (!exists(/databases/$(database)/documents/days/$(dayId)/orders/$(id)) || get(/databases/$(database)/documents/days/$(dayId)/orders/$(id)).data.ownerId==request.resource.data.ownerId);
+   allow update: if signedIn() && validPerson(request.resource.data,id) && request.resource.data.name==resource.data.name && request.resource.data.createdAt==resource.data.createdAt && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']) && recipient(resource.data.ownerId) && request.resource.data.ownerId==request.auth.uid;
+   allow delete: if false;
+  }
+  function groupPerson(name){return name.lower().replace('Đ','đ').replace('[\\s]+',' ');}
+  function validGroup(g,code){
+   return g.keys().hasAll(['reference','requestedBy','name','personKey','ownerIds','amount','count','expectedCount','lastItemKey','state','selectionHash','bankBin','bankName','accountNumber','accountName','bankConfigUpdatedAt','createdAt','updatedAt','expiresAt','invalidatedDayId','invalidatedOrderId'])
+    && g.keys().hasOnly(['reference','requestedBy','name','personKey','ownerIds','amount','count','expectedCount','lastItemKey','state','selectionHash','bankBin','bankName','accountNumber','accountName','bankConfigUpdatedAt','createdAt','updatedAt','expiresAt','invalidatedDayId','invalidatedOrderId'])
+    && paymentCode(code) && code==g.reference && validUid(g.requestedBy) && validText(g.name,100) && g.personKey==groupPerson(g.name)
+    && g.ownerIds is list && g.ownerIds.size()<=1000 && g.ownerIds.toSet().size()==g.ownerIds.size()
+    && g.amount is int && g.amount>=0 && g.amount<=30000000 && g.count is int && g.count>=0 && g.expectedCount is int && g.expectedCount>=1 && g.expectedCount<=1000 && g.count<=g.expectedCount
+    && g.lastItemKey is string && g.lastItemKey.size()<=200 && g.state in ['building','ready','invalid','paid'] && g.selectionHash is string && g.selectionHash.matches('^[a-f0-9]{64}$')
+    && bankFields(g) && g.bankConfigUpdatedAt is timestamp && g.createdAt is timestamp && g.updatedAt==request.time && g.expiresAt is timestamp && g.expiresAt>g.createdAt && g.expiresAt<=g.createdAt+duration.value(1,'d')
+    && g.invalidatedDayId is string && g.invalidatedDayId.size()<=100 && g.invalidatedOrderId is string && g.invalidatedOrderId.size()<=70;
+  }
+  function groupBank(g){let b=get(/databases/$(database)/documents/settings/payment).data;return g.bankBin==b.bankBin && g.bankName==b.bankName && g.accountNumber==b.accountNumber && g.accountName==b.accountName && g.bankConfigUpdatedAt==b.updatedAt;}
+  function groupAppend(g,code){
+   let item=getAfter(/databases/$(database)/documents/paymentGroups/$(code)/items/$(g.lastItemKey)).data;
+   return resource.data.state=='building' && g.state=='building' && request.time<g.expiresAt && request.auth.uid==g.requestedBy
+    && g.diff(resource.data).affectedKeys().hasOnly(['count','amount','lastItemKey','ownerIds','updatedAt'])
+    && !exists(/databases/$(database)/documents/paymentGroups/$(code)/items/$(g.lastItemKey))
+    && g.count==resource.data.count+1 && g.amount==resource.data.amount+item.amount
+    && g.ownerIds.toSet()==resource.data.ownerIds.toSet().union([item.ownerId].toSet());
+  }
+  function groupInvalidation(g,code){
+   return resource.data.state in ['building','ready'] && g.state=='invalid' && g.diff(resource.data).affectedKeys().hasOnly(['state','updatedAt','invalidatedDayId','invalidatedOrderId'])
+    && (g.requestedBy==request.auth.uid || admin() || (g.invalidatedDayId!='' && get(/databases/$(database)/documents/paymentLinks/$(g.invalidatedDayId)/orders/$(g.invalidatedOrderId)).data.reference==code
+     && (get(/databases/$(database)/documents/days/$(g.invalidatedDayId)/orders/$(g.invalidatedOrderId)).data.ownerId==request.auth.uid || recipient(get(/databases/$(database)/documents/days/$(g.invalidatedDayId)/orders/$(g.invalidatedOrderId)).data.ownerId))));
+  }
+  function editableGroup(code,key){
+   let g=get(/databases/$(database)/documents/paymentGroups/$(code)).data;
+   return exists(/databases/$(database)/documents/paymentGroupSettlements/$(code)/items/$(key)) || g.state=='invalid' || (g.state!='paid' && g.expiresAt<=request.time)
+    || (g.state in ['building','ready'] && getAfter(/databases/$(database)/documents/paymentGroups/$(code)).data.state=='invalid' && getAfter(/databases/$(database)/documents/paymentGroups/$(code)).data.updatedAt==request.time);
+  }
+  function editableLinkedOrder(dayId,orderId){
+   let link=/databases/$(database)/documents/paymentLinks/$(dayId)/orders/$(orderId);
+   return !exists(link) || get(link).data.get('kind','single')!='group' || editableGroup(get(link).data.reference,dayId+'~'+orderId);
+  }
+  function validGroupItem(i,code,key){
+   let before=get(/databases/$(database)/documents/paymentGroups/$(code)).data;
+   let after=getAfter(/databases/$(database)/documents/paymentGroups/$(code)).data;
+   let o=get(/databases/$(database)/documents/days/$(i.dayId)/orders/$(i.orderId)).data;
+   return i.keys().hasAll(['key','dayId','orderId','date','name','dish','ownerId','dishId','price','quantity','amount','orderCreatedAt']) && i.keys().hasOnly(['key','dayId','orderId','date','name','dish','ownerId','dishId','price','quantity','amount','orderCreatedAt'])
+    && before.state=='building' && before.requestedBy==request.auth.uid && request.time<before.expiresAt && after.lastItemKey==key && after.count==before.count+1 && after.updatedAt==request.time
+    && key==i.key && key==i.dayId+'~'+i.orderId && i.date==get(/databases/$(database)/documents/days/$(i.dayId)).data.date && o.cancelled==false && o.paid==false && (o.ownerId==request.auth.uid || admin())
+    && i.name==o.name && groupPerson(o.name)==before.personKey && i.dish==o.dish && i.ownerId==o.ownerId && i.dishId==o.dishId && i.price is int && i.quantity is int && i.amount is int && i.price==o.price && i.quantity==o.quantity && i.orderCreatedAt==o.createdAt && i.amount==due(o)
+    && getAfter(/databases/$(database)/documents/paymentLinks/$(i.dayId)/orders/$(i.orderId)).data.reference==code && getAfter(/databases/$(database)/documents/paymentLinks/$(i.dayId)/orders/$(i.orderId)).data.kind=='group';
+  }
+  function validGroupLink(d,dayId,orderId){
+   let g=getAfter(/databases/$(database)/documents/paymentGroups/$(d.reference)).data;
+   let item=getAfter(/databases/$(database)/documents/paymentGroups/$(d.reference)/items/$(dayId+'~'+orderId)).data;
+   return d.keys().hasAll(['reference','kind','updatedAt']) && d.keys().hasOnly(['reference','kind','updatedAt']) && d.kind=='group' && d.updatedAt==request.time && g.state=='building' && g.requestedBy==request.auth.uid && g.updatedAt==request.time && g.lastItemKey==dayId+'~'+orderId && item.dayId==dayId && item.orderId==orderId;
+  }
+  function validGroupReceipt(d,code){
+   let g=get(/databases/$(database)/documents/paymentGroups/$(code)).data;
+   return d.keys().hasAll(['reference','transactionKey','transactionId','amount','bankBin','accountNumber','occurredAt','notificationHash','createdBy','createdAt']) && d.keys().hasOnly(['reference','transactionKey','transactionId','amount','bankBin','accountNumber','occurredAt','notificationHash','createdBy','createdAt'])
+    && g.state=='ready' && g.count==g.expectedCount && g.count>0 && groupBank(g) && g.expiresAt>request.time && d.reference==code && d.createdBy==request.auth.uid && d.createdAt==request.time
+    && d.transactionId is string && d.transactionId.matches('^[A-Za-z0-9._/-]{1,120}$') && d.transactionKey==hash(d.bankBin+'|'+d.accountNumber+'|'+d.transactionId) && d.notificationHash is string && d.notificationHash.matches('^[a-f0-9]{64}$')
+    && d.amount is int && d.amount==g.amount && d.bankBin==g.bankBin && d.accountNumber==g.accountNumber && d.occurredAt is timestamp && d.occurredAt>=g.createdAt-duration.value(2,'m') && d.occurredAt<=request.time+duration.value(5,'m') && d.occurredAt<=g.expiresAt
+    && !exists(/databases/$(database)/documents/paymentTransactions/$(d.transactionKey)) && getAfter(/databases/$(database)/documents/paymentTransactions/$(d.transactionKey)).data.reference==code
+    && getAfter(/databases/$(database)/documents/paymentGroups/$(code)).data.state=='paid' && getAfter(/databases/$(database)/documents/paymentGroups/$(code)).data.updatedAt==request.time;
+  }
+  function validGroupSettlement(d,code,key){
+   let i=get(/databases/$(database)/documents/paymentGroups/$(code)/items/$(key)).data;
+   let o=get(/databases/$(database)/documents/days/$(i.dayId)/orders/$(i.orderId)).data;
+   return d.keys().hasAll(['reference','dayId','orderId','createdBy','createdAt']) && d.keys().hasOnly(['reference','dayId','orderId','createdBy','createdAt']) && d.reference==code && d.dayId==i.dayId && d.orderId==i.orderId && d.createdBy==request.auth.uid && d.createdAt==request.time
+    && get(/databases/$(database)/documents/paymentGroups/$(code)).data.state=='paid' && get(/databases/$(database)/documents/paymentReceipts/$(code)).data.reference==code
+    && i.amount==due(o) && o.paid==false && o.cancelled==false && o.ownerId==i.ownerId && o.createdAt==i.orderCreatedAt && o.dishId==i.dishId && o.price==i.price && o.quantity==i.quantity
+    && get(/databases/$(database)/documents/paymentLinks/$(i.dayId)/orders/$(i.orderId)).data.reference==code
+    && getAfter(/databases/$(database)/documents/days/$(i.dayId)/orders/$(i.orderId)).data.paid==true;
+  }
+  function webhookGroupPayment(dayId,orderId,d){
+   let code=get(/databases/$(database)/documents/paymentLinks/$(dayId)/orders/$(orderId)).data.reference;
+   let key=dayId+'~'+orderId;
+   let marker=getAfter(/databases/$(database)/documents/paymentGroupSettlements/$(code)/items/$(key)).data;
+   return resource.data.paid==false && resource.data.cancelled==false && d.paid==true && d.diff(resource.data).affectedKeys().hasOnly(['paid','receivedAmount','refundedAmount','voidedAmount','updatedAt'])
+    && bankMoney(d,get(/databases/$(database)/documents/paymentGroups/$(code)/items/$(key)).data.amount) && !exists(/databases/$(database)/documents/paymentGroupSettlements/$(code)/items/$(key)) && marker.reference==code && marker.createdAt==request.time && marker.createdBy==request.auth.uid;
+  }
+  match /paymentGroups/{code}{
+   allow get: if signedIn();allow list: if admin() || (signedIn() && resource.data.requestedBy==request.auth.uid);
+   allow create: if signedIn() && validGroup(request.resource.data,code) && request.resource.data.requestedBy==request.auth.uid && request.resource.data.createdAt==request.time && request.resource.data.state=='building' && request.resource.data.count==0 && request.resource.data.amount==0 && request.resource.data.ownerIds==[] && request.resource.data.lastItemKey=='' && request.resource.data.invalidatedDayId=='' && request.resource.data.invalidatedOrderId=='' && groupBank(request.resource.data) && !exists(/databases/$(database)/documents/paymentIntents/$(code));
+   allow update: if signedIn() && validGroup(request.resource.data,code) && (
+    groupAppend(request.resource.data,code) || groupInvalidation(request.resource.data,code)
+    || (request.auth.uid==resource.data.requestedBy && resource.data.state=='building' && request.resource.data.state=='ready' && request.resource.data.count==request.resource.data.expectedCount && request.resource.data.count>0 && request.time<resource.data.expiresAt && groupBank(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state','updatedAt']))
+    || (paymentBot() && resource.data.state=='ready' && request.resource.data.state=='paid' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state','updatedAt']) && getAfter(/databases/$(database)/documents/paymentReceipts/$(code)).data.createdAt==request.time && getAfter(/databases/$(database)/documents/paymentReceipts/$(code)).data.createdBy==request.auth.uid));
+   allow delete: if false;
+   match /items/{key}{allow read: if signedIn();allow create: if signedIn() && validGroupItem(request.resource.data,code,key);allow update,delete: if false;}
+  }
+  match /paymentGroupSettlements/{code}/items/{key}{allow read: if signedIn();allow create: if paymentBot() && validGroupSettlement(request.resource.data,code,key);allow update,delete: if false;}
+
   match /settings/payment{allow read: if signedIn();allow create,update: if admin() && (validBankPayment(request.resource.data) || validLegacyPayment(request.resource.data));allow delete: if false;}
   match /paymentIntegrations/{uid}{allow get: if admin() || (signedIn() && uid==request.auth.uid);allow list: if admin();allow create: if validIntegration(request.resource.data,uid,true);allow update: if validIntegration(request.resource.data,uid,false);allow delete: if false;}
   match /paymentIntents/{code}{allow get: if signedIn() && (paymentBot() || admin() || (resource!=null && resource.data.ownerId==request.auth.uid));allow list: if admin();allow create: if signedIn() && validPaymentIntent(request.resource.data,code);allow update,delete: if false;}
-  match /paymentLinks/{dayId}/orders/{orderId}{allow get: if paymentOrderAccess(dayId,orderId);allow list: if admin();allow create,update: if paymentOrderAccess(dayId,orderId) && !paymentBot() && validPaymentLink(request.resource.data,dayId,orderId);allow delete: if false;}
+  match /paymentLinks/{dayId}/orders/{orderId}{allow get: if paymentOrderAccess(dayId,orderId);allow list: if admin();allow create,update: if paymentOrderAccess(dayId,orderId) && !paymentBot() && editableLinkedOrder(dayId,orderId) && (request.resource.data.get('kind','single')=='group'?validGroupLink(request.resource.data,dayId,orderId):validSinglePaymentLink(request.resource.data,dayId,orderId));allow delete: if paymentOrderAccess(dayId,orderId) && !paymentBot() && editableLinkedOrder(dayId,orderId);}
   match /paymentReceipts/{code}{
    allow get: if signedIn() && (paymentBot() || admin() || get(/databases/$(database)/documents/paymentIntents/$(code)).data.ownerId==request.auth.uid);allow list: if admin();
-   allow create: if paymentBot() && validPaymentReceipt(request.resource.data,code);allow update,delete: if false;
+   allow create: if paymentBot() && (exists(/databases/$(database)/documents/paymentGroups/$(code))?validGroupReceipt(request.resource.data,code):validPaymentReceipt(request.resource.data,code));allow update,delete: if false;
   }
   match /paymentTransactions/{key}{
    allow get: if paymentBot() || admin();allow list: if admin();
@@ -226,19 +358,28 @@ service cloud.firestore {
     // All app visitors receive an anonymous Firebase session and may view meals.
     // Editing, cancellation, payment and ownership transfer remain checked below.
     allow get,list: if signedIn() && parentExists(dayId);
-    allow create: if signedIn() && activeUser() && validOrder(request.resource.data,orderId) && request.resource.data.ownerId == request.auth.uid
-     && request.resource.data.createdAt == request.time && request.resource.data.paid == false && request.resource.data.cancelled == false && openDay(dayId) && menuPrice(dayId,request.resource.data);
+    allow create: if signedIn() && activeUser() && validOrder(request.resource.data,orderId) && (request.resource.data.ownerId == request.auth.uid || admin())
+     && request.resource.data.createdAt == request.time && request.resource.data.paid == false && request.resource.data.cancelled == false && received(request.resource.data)==0 && refunded(request.resource.data)==0 && voided(request.resource.data)==0 && request.resource.data.get('paymentEventId','')=='' && personOrderAccess(dayId,orderId,request.resource.data) && openDay(dayId) && menuPrice(dayId,request.resource.data);
     allow update: if signedIn() && parentExists(dayId) && validOrder(request.resource.data,orderId) && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.name == resource.data.name && (
-     (paymentBot() && webhookPayment(dayId,orderId,request.resource.data))
-     || (recipient(resource.data.ownerId) && request.resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']))
-     || (request.resource.data.ownerId == resource.data.ownerId && (
-      (admin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid','updatedAt']))
-      || (((ownOrder() && (activeUser() || (request.resource.data.cancelled==true && request.resource.data.paid==false && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cancelled','paid','updatedAt'])))) || admin()) && openDay(dayId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dishId','dish','price','quantity','note','paid','cancelled','updatedAt'])
-       && (samePrice(request.resource.data) || menuPrice(dayId,request.resource.data)) && (admin() || correctPayment(request.resource.data)))
+     (paymentBot() && (get(/databases/$(database)/documents/paymentLinks/$(dayId)/orders/$(orderId)).data.get('kind','single')=='group'?webhookGroupPayment(dayId,orderId,request.resource.data):webhookPayment(dayId,orderId,request.resource.data)))
+     || (recipient(resource.data.ownerId) && request.resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerId','updatedAt']) && editableLinkedOrder(dayId,orderId))
+     || (editableLinkedOrder(dayId,orderId) && request.resource.data.ownerId == resource.data.ownerId && (
+      (admin() && request.resource.data.get('paymentEventId','')!=resource.data.get('paymentEventId','') && financialEvent(dayId,orderId,request.resource.data))
+      || (((ownOrder() && (activeUser() || (request.resource.data.cancelled==true && request.resource.data.paid==false && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cancelled','paid','receivedAmount','refundedAmount','voidedAmount','updatedAt'])))) || admin()) && openDay(dayId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dishId','dish','price','quantity','note','paid','cancelled','receivedAmount','refundedAmount','voidedAmount','updatedAt'])
+       && (samePrice(request.resource.data) || menuPrice(dayId,request.resource.data)) && correctPayment(request.resource.data))
      ))
     );
     allow delete: if false;
    }
+  }
+  // Explicitly public capability link requested for restaurant handoff. No list
+  // access without admin, no user/payment fields in the validated JSON view.
+  function validRestaurantShare(d,token){return token.matches('^[a-f0-9]{32}$') && d.keys().hasAll(['dayId','payload','active','version','createdBy','createdAt','expiresAt']) && d.keys().hasOnly(['dayId','payload','active','version','createdBy','createdAt','expiresAt']) && d.dayId is string && d.dayId.matches('^[A-Za-z0-9_-]{1,100}$') && parentExists(d.dayId) && d.payload is string && d.payload.size()>0 && d.payload.size()<=300000 && d.active is bool && d.version==1 && validUid(d.createdBy) && d.createdAt is timestamp && d.expiresAt is timestamp && d.expiresAt>d.createdAt && d.expiresAt<=d.createdAt+duration.value(7,'d');}
+  match /restaurantShares/{token}{
+   allow get: if admin() || (resource.data.active==true && request.time<resource.data.expiresAt);allow list: if admin();
+   allow create: if admin() && validRestaurantShare(request.resource.data,token) && request.resource.data.createdBy==request.auth.uid && request.resource.data.createdAt==request.time && request.resource.data.active==true;
+   allow update: if admin() && validRestaurantShare(request.resource.data,token) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']) && request.resource.data.active==false;
+   allow delete: if false;
   }
   match /{path=**}{allow read,write: if false;}
  }

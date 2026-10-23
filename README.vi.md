@@ -80,3 +80,7 @@ npm test
 ## Nguồn mở và đóng góp
 
 Mã nguồn ứng dụng được phát hành theo [giấy phép MIT](LICENSE). Xem [hướng dẫn đóng góp](CONTRIBUTING.md), [báo lỗi bảo mật](SECURITY.md), [cài đặt bằng tiếng Anh](docs/setup.md) và [hướng dẫn dịch giao diện](docs/localization.md). Ảnh minh họa bên ngoài và thư viện phụ thuộc giữ giấy phép/quyền riêng của chủ sở hữu.
+
+## Đặt nhiều món, thanh toán chênh lệch và gửi nhà hàng
+
+Xem [hướng dẫn nhiều món, thanh toán gộp, hoàn tiền và chia sẻ](docs/orders-payments-sharing.md). Phần Tổng hợp & thanh toán xuất PDF/JPG thay CSV, quản trị tạo link gửi nhà hàng dùng 7 ngày. Đơn đã trả giữ tiền khi sửa/hủy; chỉ thu phần thiếu hoặc ghi cần hoàn, quản trị xác nhận sau khi hoàn thực tế. Publish toàn bộ Rules mới trước khi triển khai.

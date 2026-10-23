@@ -50,3 +50,7 @@ Orders use `days/{dayId}/orders/{orderId}`. Shared team data and private profile
 The default cutoff is 09:30 Vietnam time; administrators can open/close a day manually. Pickup draws close the participant list before saving an immutable result.
 
 For detailed Vietnamese operations, see [README.vi.md](../README.vi.md) and [deployment notes](deploy-vercel.md).
+
+## Multiple dishes, partial balances and refunds
+
+See [orders, payment differences and restaurant sharing](orders-payments-sharing.md) for grouped QRs, resumable settlement, preserved paid amounts, administrator-confirmed refunds and expiring restaurant links. QR amounts now represent the remaining balance, which can be lower than the meal total. Publish the full updated Rules before deploying.
