@@ -1,5 +1,7 @@
 # QR theo đơn và nhận thông báo BIDV / Techcombank qua Shortcut
 
+Để nhận kết quả và lý do lỗi của API trong channel Telegram private, xem [cấu hình log thanh toán Telegram](telegram-payment-logs.md).
+
 ## Tài khoản nhận tiền và QR
 
 Quản trị mở **Thông tin chuyển khoản → Cài đặt tài khoản nhận tiền**, chọn ngân hàng, nhập số tài khoản và tên chủ tài khoản rồi lưu. Khách không có phần cài đặt này. Thông tin nhận tiền được lưu trong `settings/payment` và được dùng chung cho nhóm; chỉ quản trị được thay đổi.
