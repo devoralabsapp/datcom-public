@@ -2,6 +2,8 @@
 
 The UI supports `vi` (Vietnamese) and `en` (English). **Vietnamese is always the default**, including for browsers whose preferred language is English. There is no browser-language detection or redirect.
 
+The English application name is **Lunch Together**; the Vietnamese name remains **Cơm Nhà**. The language selector also changes the brand, workspace label, page title and restaurant export heading. Existing browser storage keys and payment references remain stable.
+
 ## User experience
 
 The VI/EN control appears in the app header and on sign-in. Selecting a language updates labels without resetting the tab, order draft, filters, or QR. A first-party cookie, `com-nha-locale-v1`, remembers the choice for one year across app routes. It uses path `/`, `SameSite=Lax`, and `Secure` on HTTPS. When cookies are blocked, switching still works during the page session, but persistence is unavailable.

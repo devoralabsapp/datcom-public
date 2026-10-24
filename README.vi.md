@@ -1,6 +1,8 @@
-# Cơm Nhà · Đặt cơm văn phòng
+# Cơm Nhà · Lunch Together
 
 [English](README.md) · [Tiếng Việt](README.vi.md)
+
+**Lunch Together** là tên tiếng Anh của ứng dụng Cơm Nhà — cùng đặt bữa trưa, theo dõi thanh toán và chia sẻ việc lấy cơm trong nhóm. Repo mã nguồn: [devoralabsapp/lunch-together](https://github.com/devoralabsapp/lunch-together). Giao diện mặc định vẫn là tiếng Việt.
 
 Bản mã nguồn công khai để bàn giao vận hành và phát triển. Xem **[Hướng dẫn bàn giao](docs/handover.md)** trước khi kết nối Firebase/Vercel. Repo dùng cấu hình mẫu, không chứa dữ liệu hoặc lịch sử Git của hệ thống đang chạy.
 

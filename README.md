@@ -1,8 +1,8 @@
-# Cơm Nhà · Office lunch coordination
+# Lunch Together · Office lunch coordination
 
 [English](README.md) · [Tiếng Việt](README.vi.md)
 
-Cơm Nhà helps a team order lunch together, track who has paid, and share the job of collecting meals. People can order as guests or sign in with Google. The interface defaults to **Vietnamese**, with **English** available from the VI/EN selector.
+Lunch Together helps a team order lunch together, track who has paid, and share the job of collecting meals. The app is called **Cơm Nhà** in Vietnamese. People can order as guests or sign in with Google. The interface defaults to **Vietnamese**, with **English** available from the VI/EN selector.
 
 This is an early-stage, MIT-licensed application maintained by [devoralabsapp](https://github.com/devoralabsapp). Contributions, bug reports, and translations are welcome. The public repository contains application source and sample data; each operator supplies their own Firebase project and deployment configuration.
 
@@ -28,8 +28,8 @@ This is an early-stage, MIT-licensed application maintained by [devoralabsapp](h
 Requirements: **Node.js 22**, npm, and a Firebase project with **Cloud Firestore Standard**. **Java 21** is needed for emulator tests.
 
 ```sh
-git clone https://github.com/devoralabsapp/datcom-public.git
-cd datcom-public
+git clone https://github.com/devoralabsapp/lunch-together.git
+cd lunch-together
 npm ci --include=dev --include=optional
 cp .env.example .env.local
 ```
