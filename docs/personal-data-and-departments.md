@@ -8,6 +8,12 @@ Profiles include a preferred lunch-order name, optional phone number and job tit
 
 Only administrators see **Administration / Quản trị**, with **Departments / Phòng ban** and **User management / Quản trị người dùng** submenus. Administrators can initialize a company/department pair, add entries, rename them, deactivate/reactivate them, and choose defaults suggested to new profiles. Existing members and historical records are retained when an entry is deactivated. A department keeps its company; create a new department to represent a move. People select their own active affiliation in their profiles.
 
+In **User management**, company and department selectors sit beside the account-status tabs and combine with those tabs and the name/email/UID search. Selecting a company resets the department selector; selecting a department also selects its company. Inactive entries and unassigned accounts remain filterable. These are administrator directory filters, not access-control or meal visibility filters.
+
+**Delete** requires an explicit confirmation and is available only to administrators. The application refuses deletion if any `personalDetails` record links an account, including anonymous visitors and blocked accounts. Users must move/clear their affiliation first; no account is automatically moved. A company must have no child departments either. Orders, payments, personal details and backups are never deleted. Deleting a default clears both default selections atomically. An audit entry records the deleted item's ID/name.
+
+The deletion transaction first locks the catalog entry with a bounded token and server timestamp. Rules prevent new affiliations/defaults/child departments while locked; server-only equality queries then check membership. A rejected attempt releases its lock. If the browser disconnects, an administrator can retry after two minutes or edit the entry to release the stale lock. Concurrent attempts must retain their own token before deletion. Firestore Rules cannot prove a collection query is empty: the membership check is enforced by this trusted administrator-client protocol. Administrators with custom SDK access could bypass that protocol; server-only enforcement would require a privileged backend. Regular users cannot lock or delete catalog items.
+
 `lib/organization-defaults.ts` contains suggestions for the administrator's explicit initial setup; the public source uses sample names. Actual catalog data lives in Firestore. Department membership is descriptive: it does not introduce separate workspaces, tenant isolation, or change the existing shared visibility of meal orders/statistics. Administrators can see affiliations in the user directory.
 
 ## Export
@@ -40,6 +46,8 @@ Rules are a tested prototype, not an independent security certification. See [th
 
 - Bấm thẻ tài khoản bên trái, hoặc nút chữ viết tắt ở đầu trang trên điện thoại, để sửa hồ sơ. Email Google không thể sửa qua form này.
 - Quản trị → Phòng ban: tạo danh mục ban đầu, thêm/đổi tên/ngừng sử dụng công ty và phòng ban, chọn gợi ý mặc định. Người dùng tự chọn đơn vị trong hồ sơ. Danh mục không chia tách dữ liệu đặt cơm thành các hệ thống riêng.
+- Quản trị người dùng: lọc theo công ty/phòng ban ngay cạnh tab Đang khóa; kết hợp với tab quyền/trạng thái và ô tìm kiếm. Có lựa chọn chưa thuộc công ty/phòng ban.
+- Xóa danh mục cần xác nhận và chỉ thực hiện khi chưa có tài khoản liên kết, bao gồm khách/tài khoản khóa. Công ty phải xóa phòng ban trước. Không xóa tài khoản, đơn hay lịch sử tiền; mục đang mặc định được bỏ mặc định.
 - Xuất dữ liệu của tôi tạo JSON đầy đủ dữ liệu thuộc UID hiện tại; giữ file riêng tư. Khi nhập, hồ sơ và đơn chưa có/chưa thanh toán còn hợp lệ được khôi phục. Không ghi đè đơn, không giành tên của người khác và không tự cộng lại tiền/số dư.
 - Toàn bộ file, kể cả lịch sử và các đơn chưa khôi phục được, nằm trong Lịch sử nhập dữ liệu để chủ tài khoản/quản trị tải lại. Có thể mở lại ngày và nhập lại cùng file. Nhật ký cũ không được phát lại thành hành động mới.
 - Quản trị người dùng → Đối soát dữ liệu nhập: kiểm tra giao dịch thật, cập nhật thanh toán bằng luồng hiện có, rồi ghi chú và đánh dấu đã đối soát. Nút đánh dấu chỉ lưu kết quả kiểm tra, không tự ghi tiền.

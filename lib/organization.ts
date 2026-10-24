@@ -1,4 +1,4 @@
-import {collection,doc,getDoc,getDocs,runTransaction,serverTimestamp,Timestamp} from 'firebase/firestore';
+import {collection,doc,getDoc,getDocs,getDocsFromServer,query,where,limit,deleteField,runTransaction,serverTimestamp,Timestamp} from 'firebase/firestore';
 import type {MealClient} from './meal-client';
 import {ensureUser,friendlyFirebaseError} from './firebase-client';
 import {appendActivity} from './activity';
@@ -10,6 +10,10 @@ export type Organization={companies:Company[];departments:Department[];defaultCo
 export type PersonalDetails={companyId:string;departmentId:string;phone:string;jobTitle:string};
 export type PersonalProfile=PersonalDetails&{preferredName:string;email:string;google:boolean;hasDetails?:boolean};
 export const emptyDetails:PersonalDetails={companyId:'',departmentId:'',phone:'',jobTitle:''};
+export function resolveAffiliation(org:Organization,value:{companyId?:unknown;departmentId?:unknown},activeOnly=false){
+ const companyId=org.companies.find(c=>c.id===value.companyId&&(!activeOnly||c.active))?.id||'';
+ return {companyId,departmentId:companyId?org.departments.find(d=>d.id===value.departmentId&&d.companyId===companyId&&(!activeOnly||d.active))?.id||'':''};
+}
 export function personalError(error:unknown){return (error as {code?:string})?.code==='permission-denied'?'Tính năng hồ sơ và phòng ban chưa được bật trên Firebase. Vui lòng liên hệ quản trị.':friendlyFirebaseError(error);}
 export const catalogId=(id:string)=>/^[A-Za-z0-9_-]{1,100}$/.test(id);
 export const timestampText=(value:unknown)=>value instanceof Timestamp?value.toDate().toISOString():null;
@@ -18,7 +22,20 @@ async function adminUser(client:MealClient){const user=await ensureUser(client.a
 export async function readOrganization(client:MealClient):Promise<Organization>{
  const user=await ensureUser(client.auth),[companies,departments,settings]=await Promise.all([getDocs(collection(client.db,'companies')),getDocs(collection(client.db,'departments')),getDoc(doc(client.db,'settings','organization'))]);
  if(client.auth.currentUser?.uid!==user.uid)throw new Error('Phiên đăng nhập đã thay đổi. Vui lòng tải lại.');
- return {companies:companies.docs.map(d=>({id:d.id,name:String(d.data().name),active:d.data().active===true})).sort((a,b)=>a.name.localeCompare(b.name,'vi')),departments:departments.docs.map(d=>({id:d.id,name:String(d.data().name),companyId:String(d.data().companyId),active:d.data().active===true})).sort((a,b)=>a.name.localeCompare(b.name,'vi')),defaultCompanyId:settings.data()?.defaultCompanyId||'',defaultDepartmentId:settings.data()?.defaultDepartmentId||'',configured:settings.exists()};
+ const org={companies:companies.docs.map(d=>({id:d.id,name:String(d.data().name),active:d.data().active===true&&!d.data().deletionToken})).sort((a,b)=>a.name.localeCompare(b.name,'vi')),departments:departments.docs.map(d=>({id:d.id,name:String(d.data().name),companyId:String(d.data().companyId),active:d.data().active===true&&!d.data().deletionToken})).sort((a,b)=>a.name.localeCompare(b.name,'vi')),defaultCompanyId:settings.data()?.defaultCompanyId||'',defaultDepartmentId:settings.data()?.defaultDepartmentId||'',configured:settings.exists()};
+ const defaults=resolveAffiliation(org,{companyId:org.defaultCompanyId,departmentId:org.defaultDepartmentId},true);return {...org,defaultCompanyId:defaults.companyId,defaultDepartmentId:defaults.departmentId};
+}
+export async function deleteOrganizationItem(client:MealClient,kind:'company'|'department',id:string){
+ const user=await adminUser(client);if(!['company','department'].includes(kind)||!catalogId(id))throw new Error('Nhập công ty hoặc phòng ban hợp lệ.');
+ const ref=doc(client.db,kind==='company'?'companies':'departments',id),token=crypto.randomUUID().replaceAll('-','');let locked=false;
+ try{
+  await runTransaction(client.db,async tx=>{const current=await tx.get(ref);if(!current.exists())throw new Error('Công ty hoặc phòng ban không còn tồn tại. Vui lòng cập nhật.');const data=current.data();if(data.deletionToken&&(!(data.deletionStartedAt instanceof Timestamp)||Date.now()-data.deletionStartedAt.toMillis()<120000))throw new Error('Mục này đang được kiểm tra để xóa. Vui lòng thử lại sau.');tx.update(ref,{deletionToken:token,deletionStartedAt:serverTimestamp(),updatedAt:serverTimestamp(),updatedBy:user.uid});});locked=true;
+  // Server reads after the lock: Rules reject new affiliations and child departments until it is released.
+  const accounts=await getDocsFromServer(query(collection(client.db,'personalDetails'),where(kind==='company'?'companyId':'departmentId','==',id),limit(1)));
+  if(!accounts.empty)throw new Error('Không thể xóa vì vẫn còn tài khoản thuộc công ty hoặc phòng ban này. Hãy chuyển tài khoản sang đơn vị khác trước.');
+  if(kind==='company'&&!(await getDocsFromServer(query(collection(client.db,'departments'),where('companyId','==',id),limit(1)))).empty)throw new Error('Hãy xóa các phòng ban của công ty trước.');
+  await runTransaction(client.db,async tx=>{const settings=doc(client.db,'settings','organization'),[current,defaults]=await Promise.all([tx.get(ref),tx.get(settings)]);if(current.data()?.deletionToken!==token)throw new Error('Danh mục đã thay đổi. Vui lòng thử lại.');if(client.auth.currentUser?.uid!==user.uid)throw new Error('Phiên đăng nhập đã thay đổi. Vui lòng tải lại.');const value=defaults.data();if(value&&(kind==='company'?value.defaultCompanyId===id:value.defaultDepartmentId===id))tx.set(settings,{defaultCompanyId:'',defaultDepartmentId:'',updatedAt:serverTimestamp(),updatedBy:user.uid});tx.delete(ref);appendActivity(tx,client.db,user.uid,{kind:'organization.save',summary:kind==='company'?'Xóa công ty':'Xóa phòng ban',details:{action:'delete',kind,id,name:current.data()?.name}});});
+ }catch(error){if(locked&&client.auth.currentUser?.uid===user.uid)try{await runTransaction(client.db,async tx=>{const current=await tx.get(ref);if(current.data()?.deletionToken===token)tx.update(ref,{deletionToken:deleteField(),deletionStartedAt:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid});});}catch{/* A disconnected administrator can retry after the short lock expires. */}throw error;}
 }
 export async function initializeOrganization(client:MealClient,companyName=organizationDefaults.companyName,departmentName=organizationDefaults.departmentName){
  const user=await adminUser(client),company=clean(companyName,100),department=clean(departmentName,100);if(!company||!department)throw new Error('Nhập tên công ty và phòng ban.');
