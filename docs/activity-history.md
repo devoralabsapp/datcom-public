@@ -6,6 +6,8 @@ Personal history shows actions performed by that identity. It does not make anot
 
 Pages contain up to 50 entries, newest first, with a document cursor. Search and category filters operate on loaded entries; search includes resolved names. Regular users fetch only their own profile, while administrators can resolve the directory. Expanding an entry uses a full-width detail row so long names, notes, references and nested changes wrap inside the panel. Mobile entries use cards. Sidebar spacing is tighter and the existing Be Vietnam Pro font is used for the larger Lunch corner label; short desktop windows hide the decorative reminder.
 
+Pending server timestamps use Firestore's local estimate. Existing entries with null or invalid timestamps remain visible with **Time unavailable / Chưa có thời gian**, without inventing a date or failing the entire page. Pagination still uses the original document snapshot. This display fix requires no Rules or index changes.
+
 ## Firebase deployment
 
 1. Publish the complete updated `firestore.rules`.
