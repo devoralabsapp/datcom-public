@@ -12,6 +12,8 @@ This is an early-stage, MIT-licensed application maintained by [devoralabsapp](h
 
 ## What it does
 
+- **Profiles, companies and departments:** edit personal details and affiliation, manage the company directory, and export/import personal JSON backups with financial records retained for administrator review.
+
 - **Daily menus and orders:** add multiple dishes to one cart, set quantities and notes; remember a guest's name on that browser; edit or cancel your own orders before closing.
 - **Optional Google sign-in:** guest ordering uses Firebase Anonymous Authentication. Linking Google supports continued access across devices.
 - **Shared visibility:** everyone can see team orders and statistics. Ownership and administrator permissions control changes.
@@ -83,3 +85,5 @@ Original application code is available under the [MIT license](LICENSE). Depende
 - [Order-list totals, personal grouped payment and reconciliation privacy](docs/order-list-payments.md) — English / Tiếng Việt
 
 - [Personal activity history, access rules and index setup](docs/activity-history.md) — English / Tiếng Việt
+
+- [Personal profiles, companies/departments and JSON backup/restore](docs/personal-data-and-departments.md) — English / Tiếng Việt

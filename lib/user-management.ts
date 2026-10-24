@@ -4,6 +4,7 @@ import type {MealClient} from './meal-client';
 import {ensureUser} from './firebase-client';
 import {normalizedOrderName} from './order-name';
 import {PRIMARY_ADMIN_UID,validUserId,type ManagedUser,type UserDirectory} from './user-model';
+import {readOrganization} from './organization';
 
 const dateText=(value:DocumentData)=>value?.toDate?.().toISOString()||'';
 function checkUid(uid:string){if(!validUserId(uid))throw new Error('UID người dùng chưa hợp lệ.');}
@@ -27,12 +28,13 @@ export async function syncUserProfile(client:MealClient,preferredName?:string){
 }
 export async function listManagedUsers(client:MealClient):Promise<UserDirectory>{
  const user=await requireAdmin(client);
- const [profiles,access,roles,days]=await Promise.all([getDocs(collection(client.db,'userProfiles')),getDocs(collection(client.db,'userAccess')),getDocs(collection(client.db,'admins')),getDocs(collection(client.db,'days'))]);
+ const [profiles,access,roles,days,details,organization]=await Promise.all([getDocs(collection(client.db,'userProfiles')),getDocs(collection(client.db,'userAccess')),getDocs(collection(client.db,'admins')),getDocs(collection(client.db,'days')),getDocs(collection(client.db,'personalDetails')),readOrganization(client)]);
  const records=new Map<string,ManagedUser>();
  function entry(uid:string){let person=records.get(uid);if(!person){person={uid,displayName:'',preferredName:'',email:'',provider:'unknown',createdAt:'',lastSeenAt:'',admin:false,blocked:false,orderCount:0,lastOrderDate:'',aliases:[]};records.set(uid,person);}return person;}
  for(const profile of profiles.docs){const p=profile.data();Object.assign(entry(profile.id),{displayName:p.displayName,preferredName:p.preferredName,email:p.email,provider:p.provider,createdAt:dateText(p.createdAt),lastSeenAt:dateText(p.lastSeenAt)});}
  for(const role of roles.docs)entry(role.id).admin=role.data().enabled===true;
  for(const state of access.docs)entry(state.id).blocked=state.data().blocked===true;
+ for(const detail of details.docs){const value=detail.data();entry(detail.id).affiliation=[organization.companies.find(c=>c.id===value.companyId)?.name,organization.departments.find(d=>d.id===value.departmentId)?.name].filter(Boolean).join(' · ');}
  for(let i=0;i<days.docs.length;i+=6){await Promise.all(days.docs.slice(i,i+6).map(async day=>{
   const orders=await getDocs(collection(client.db,'days',day.id,'orders'));
   for(const order of orders.docs){const o=order.data();if(typeof o.ownerId!=='string'||!validUserId(o.ownerId))continue;const person=entry(o.ownerId);if(o.cancelled)continue;person.orderCount++;person.lastOrderDate=[person.lastOrderDate,day.data().date].sort().at(-1)||'';if(typeof o.name==='string'&&!person.aliases.includes(o.name)&&person.aliases.length<5)person.aliases.push(o.name);}

@@ -10,6 +10,8 @@ Web Next.js 16, React 19, Firebase Authentication và Cloud Firestore Standard. 
 
 ## Tính năng
 
+- Hồ sơ cá nhân, công ty/phòng ban linh hoạt và xuất/nhập JSON của chính tài khoản; dữ liệu tiền giữ lại để quản trị đối soát.
+
 - Giao diện mặc định **tiếng Việt**; đổi sang **tiếng Anh** bằng bộ chọn VI/EN ở đầu trang. Trình duyệt nhớ lựa chọn khi tải lại. Tên, món ăn, ghi chú và mã chuyển khoản giữ nguyên.
 
 - Khách đặt/sửa/hủy cơm mà không cần bấm đăng nhập. Firebase tự tạo tài khoản ẩn danh để nhận diện chủ đơn.
@@ -94,3 +96,5 @@ Người đặt chọn Hoàn lại hoặc Để hôm sau khi có tiền thừa. 
 Chi tiết tổng theo bộ lọc, nút thanh toán gộp trong Đơn của tôi và quyền xem lịch sử đối soát: [hướng dẫn danh sách và thanh toán](docs/order-list-payments.md).
 
 Nhật ký cá nhân cần Publish Rules và tạo chỉ mục theo [hướng dẫn nhật ký](docs/activity-history.md).
+
+- [Hồ sơ cá nhân, công ty/phòng ban và sao lưu/khôi phục JSON](docs/personal-data-and-departments.md) — English / Tiếng Việt
