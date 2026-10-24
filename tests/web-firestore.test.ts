@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {initializeApp,deleteApp,type FirebaseApp} from 'firebase/app';
 import {getAuth,connectAuthEmulator,signInAnonymously,signInWithCredential,linkWithCredential,GoogleAuthProvider} from 'firebase/auth';
-import {getFirestore,connectFirestoreEmulator,doc,getDoc,getDocs,collection,query,where,orderBy,limit,setDoc,updateDoc,deleteDoc,deleteField,writeBatch,serverTimestamp,Timestamp,terminate,setLogLevel,type Firestore} from 'firebase/firestore';
+import {getFirestore,connectFirestoreEmulator,doc,getDoc,getDocs,collection,query,where,orderBy,limit,setDoc,updateDoc,deleteDoc,deleteField,writeBatch,serverTimestamp,Timestamp,terminate,setLogLevel,disableNetwork,enableNetwork,onSnapshot,type Firestore} from 'firebase/firestore';
 import {initializeTestEnvironment,assertFails,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {MealClient} from '../lib/meal-client';
 import type {Auth} from 'firebase/auth';
@@ -517,6 +517,32 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    await assertFails(setDoc(doc(payer.db,'activityLogs','a'.repeat(32)),activityValue(admin.auth.currentUser!.uid,{kind:'app.visit',summary:'Giả danh'})));
    await assertFails(setDoc(doc(payer.db,'activityLogs','b'.repeat(32)),{...activityValue(payer.auth.currentUser!.uid,{kind:'bank.received',summary:'Giả ngân hàng'}),source:'bank'}));
    assert.ok(events.docs.some(e=>e.data().kind==='bank.received'));assert.ok(events.docs.filter(e=>e.data().source==='bank').every(e=>!e.data().details.includes('Balance:')));
+  });
+  await t.test('activity pages retain null and malformed legacy times without losing valid entries or cursor',async()=>{
+   const payer=await client('activity-legacy-time'),uid=payer.auth.currentUser!.uid;
+   const valid=Timestamp.fromDate(new Date('2099-01-01T00:00:00Z'));
+   await environment.withSecurityRulesDisabled(async context=>{
+    const db=context.firestore() as unknown as Firestore,batch=writeBatch(db);
+    for(const [id,createdAt] of Object.entries({valid,null:null,text:'not-a-timestamp',number:123,object:{seconds:123,nanoseconds:0}}))batch.set(doc(db,'activityLogs','legacy-time-'+id),{...activityValue(uid,{kind:'app.visit',summary:'Nhật ký thời gian mẫu'}),createdAt});
+    await batch.commit();
+   });
+   const page=await readActivityPage(payer,uid,false);assert.equal(page.entries.length,5);
+   assert.equal(page.entries.find(e=>e.id==='legacy-time-valid')?.time,'2099-01-01T00:00:00.000Z');
+   for(const id of ['null','text','number','object'])assert.equal(page.entries.find(e=>e.id==='legacy-time-'+id)?.time,null);
+   assert.equal(page.cursor?.id,'legacy-time-null');assert.equal(page.more,false);
+   assert.equal((await readActivityPage(payer,uid,false,page.cursor)).entries.length,0);
+  });
+  await t.test('activity pages read a pending server timestamp and keep its eventual server time',async()=>{
+   const payer=await client('activity-pending-time'),uid=payer.auth.currentUser!.uid,ref=doc(collection(payer.db,'activityLogs'));
+   await disableNetwork(payer.db);
+   const write=setDoc(ref,activityValue(uid,{kind:'page.view',summary:'Xem mục trong ứng dụng'}));
+   try{
+    await new Promise<void>((resolve,reject)=>{const unsubscribe=onSnapshot(ref,snapshot=>{if(snapshot.metadata.hasPendingWrites){assert.equal(snapshot.data()?.createdAt,null);unsubscribe();resolve();}},reject);});
+    const page=await readActivityPage(payer,uid,false);assert.equal(page.entries.length,1);assert.equal(page.entries[0].id,ref.id);
+    assert.ok(page.entries[0].time);assert.ok(Number.isFinite(Date.parse(page.entries[0].time)));
+   }finally{await enableNetwork(payer.db);await write;}
+   const saved=await getDoc(ref),page=await readActivityPage(payer,uid,false);
+   assert.equal(page.entries[0].time,saved.data()!.createdAt.toDate().toISOString());
   });
   await t.test('personal activity pagination returns only the owner and never reads other profiles',async()=>{
    const payer=await client('activity-pager'),other=await client('activity-pager-other'),uid=payer.auth.currentUser!.uid;
