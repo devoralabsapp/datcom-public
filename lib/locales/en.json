@@ -914,5 +914,21 @@
   "Danh mục đã thay đổi. Vui lòng thử lại.": "The catalog changed. Please try again.",
   "Xóa công ty": "Delete company",
   "Xóa phòng ban": "Delete department",
-  "Xóa": "Delete"
+  "Xóa": "Delete",
+  "Hủy sửa công ty {0}": "Cancel editing company {0}",
+  "Hủy sửa phòng ban {0}": "Cancel editing department {0}",
+  "Đang là mặc định": "Current default",
+  "Đặt làm mặc định": "Set as default",
+  "Đã xuất dữ liệu và lưu hash trên server.": "Data exported and its hash saved on the server.",
+  "Đã xác minh: file trùng khớp bản xuất trên server.": "Verified: this file matches the export registered on the server.",
+  "Đang kiểm tra tính toàn vẹn của file…": "Checking file integrity…",
+  "Bản lưu cũ chưa có xác minh hash từ server. Chỉ dùng để tham khảo và đối chiếu giao dịch thực tế.": "This older archive has no server hash verification. Use it only as a reference and check actual transactions.",
+  "Bản sao lưu cũ chưa có hash trên server. Vui lòng xuất lại dữ liệu từ ứng dụng trước khi nhập.": "This older backup has no server hash. Export your data again from the application before importing.",
+  "File đã bị thay đổi hoặc không khớp bản xuất trên server. Không nhập dữ liệu; hãy chọn file gốc hoặc xuất lại.": "This file was changed or does not match a registered server export. No data was imported; choose the original file or export again.",
+  "Chưa xác minh được bản sao lưu. Vui lòng thử lại.": "Could not verify the backup. Please try again.",
+  "Dữ liệu vượt giới hạn xuất. Vui lòng liên hệ quản trị.": "The data exceeds export limits. Contact an administrator.",
+  "Chưa đọc được dữ liệu sao lưu. Vui lòng thử lại.": "Could not read backup data. Please try again.",
+  "Phiên đăng nhập đã hết hạn. Vui lòng tải lại.": "Your session expired. Reload the page.",
+  "API xuất không nhận nội dung file từ trình duyệt.": "The export API does not accept file contents from the browser.",
+  "Yêu cầu xác minh chưa hợp lệ.": "Invalid verification request."
 }

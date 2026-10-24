@@ -6,7 +6,7 @@ Profiles include a preferred lunch-order name, optional phone number and job tit
 
 ## Companies and departments
 
-Only administrators see **Administration / Quản trị**, with **Departments / Phòng ban** and **User management / Quản trị người dùng** submenus. Administrators can initialize a company/department pair, add entries, rename them, deactivate/reactivate them, and choose defaults suggested to new profiles. Existing members and historical records are retained when an entry is deactivated. A department keeps its company; create a new department to represent a move. People select their own active affiliation in their profiles.
+Only administrators see **Administration / Quản trị**, with **Departments / Phòng ban** and **User management / Quản trị người dùng** submenus. Administrators can initialize a company/department pair, add entries, rename them, deactivate/reactivate them, and choose defaults suggested to new profiles. Clicking Edit toggles the same item button to Cancel and resets unsaved changes on cancellation. Set as default appears only while editing a saved department; the separate defaults form has been removed. Existing members and historical records are retained when an entry is deactivated. A department keeps its company; create a new department to represent a move. People select their own active affiliation in their profiles.
 
 In **User management**, company and department selectors sit beside the account-status tabs and combine with those tabs and the name/email/UID search. Selecting a company resets the department selector; selecting a department also selects its company. Inactive entries and unassigned accounts remain filterable. These are administrator directory filters, not access-control or meal visibility filters.
 
@@ -18,13 +18,13 @@ The deletion transaction first locks the catalog entry with a bounded token and 
 
 ## Export
 
-**Export my data** downloads a UTF-8 JSON file with format `lunch-together.personal-data`, version `1`. It includes the current identity's profile and affiliation, all owned orders (including cancellations), their manual financial events, own credit sources/transfers, and actor-scoped activity entries. Order payment/credit state is retained as reference data. Bank webhook diagnostic logs performed by another identity are not personal activity. Authentication secrets, passwords, session/refresh tokens, administrator roles, integration credentials and receiving-bank configuration are excluded.
+**Export my data** downloads a UTF-8 JSON file with format `lunch-together.personal-data`, version `2`. The server creates the file from actual data and registers its exact SHA-256 before downloading. See [export integrity and compatibility](personal-backup-integrity.md). It includes the current identity's profile and affiliation, all owned orders (including cancellations), their manual financial events, own credit sources/transfers, and actor-scoped activity entries. Order payment/credit state is retained as reference data. Bank webhook diagnostic logs performed by another identity are not personal activity. Authentication secrets, passwords, session/refresh tokens, administrator roles, integration credentials and receiving-bank configuration are excluded.
 
-Exports require no service-account key or server upload. The file contains personal information and should be stored privately. Maximum import size is 10 MB of UTF-8 JSON; the format also limits record counts. If the data exceeds the supported size, export fails explicitly rather than silently truncating history.
+Exports require the existing restricted server integration and Firebase configuration, with no new service-account key or OIDC. The file contains personal information and should be stored privately. Maximum import size is 10 MB of UTF-8 JSON; the format also limits record counts. If the data exceeds the supported size, export fails explicitly rather than silently truncating history.
 
 ## Import and recovery
 
-Choose a file, inspect the counts and confirm **Import and restore**. No data is sent before that confirmation. The complete file is then archived privately for the current owner and administrators, in immutable chunks, with a SHA-256 manifest and integrity checks when reading it. The manifest ID is derived from the current UID and the file hash. Reusing the same file resumes the same import; concurrent chunk creation uses transactions.
+Choose an original v2 file. Only its export ID, SHA-256, size and source UID are sent for verification at selection time. Changed, unknown or old unregistered files are blocked with a warning. Inspect the verified counts and confirm **Import and restore**. The complete file is not sent before that confirmation. The complete file is then archived privately for the current owner and administrators, in immutable chunks, with a SHA-256 manifest and integrity checks when reading it. The manifest ID is derived from the current UID and the file hash. Reusing the same file resumes the same import; concurrent chunk creation uses transactions.
 
 Recovery applies the preferred name/contact fields and valid active affiliation. It never imports Google identity/email/provider or administrator access. An affiliation missing from the current catalog is cleared so that the person can select a valid one. A backup from another identity can supply profile/order content but cannot authorize access to that identity or take over existing orders.
 
@@ -38,14 +38,14 @@ The UI shows up to 100 loaded import manifests and up to 100 orders in an admini
 
 ## Firebase deployment and validation
 
-Publish the complete updated `firestore.rules` before using these features. New collections are `companies`, `departments`, `personalDetails`, `personalImports` and its `chunks` subcollection; catalog defaults use `settings/organization`. Personal details/backups are owner/admin readable; profile and backup content never grants roles or bypasses financial Rules. Company/department names contain no private profile fields. Existing Authentication, indexes and Vercel environment configuration remain unchanged.
+Publish the complete updated `firestore.rules` before using these features. New collections are `companies`, `departments`, `personalDetails`, `personalExports`, `personalImports` and its `chunks` subcollection; catalog defaults use `settings/organization`. Personal details/backups are owner/admin readable; profile and backup content never grants roles or bypasses financial Rules. Company/department names contain no private profile fields. Existing Authentication, indexes and Vercel environment configuration remain unchanged.
 
 Rules are a tested prototype, not an independent security certification. See [the review and attack cases](profile-organization-review.md). Standard Auth/Firestore emulators exercise app queries, schema limits, ownership, inactive/mismatched affiliation, duplicate/concurrent restore, privacy and financial non-replay. Run `npm test`, `npm run build` and `npm run typecheck` before a release. Browser verification uses only fictitious accounts and records in a `demo-` Firebase project.
 
 ## Tiếng Việt
 
 - Bấm thẻ tài khoản bên trái, hoặc nút chữ viết tắt ở đầu trang trên điện thoại, để sửa hồ sơ. Email Google không thể sửa qua form này.
-- Quản trị → Phòng ban: tạo danh mục ban đầu, thêm/đổi tên/ngừng sử dụng công ty và phòng ban, chọn gợi ý mặc định. Người dùng tự chọn đơn vị trong hồ sơ. Danh mục không chia tách dữ liệu đặt cơm thành các hệ thống riêng.
+- Quản trị → Phòng ban: tạo danh mục ban đầu, thêm/đổi tên/ngừng sử dụng công ty và phòng ban. Bấm sửa chuyển nút thành Hủy; nút Đặt làm mặc định chỉ hiện khi đang sửa phòng ban. Người dùng tự chọn đơn vị trong hồ sơ. Danh mục không chia tách dữ liệu đặt cơm thành các hệ thống riêng.
 - Quản trị người dùng: lọc theo công ty/phòng ban ngay cạnh tab Đang khóa; kết hợp với tab quyền/trạng thái và ô tìm kiếm. Có lựa chọn chưa thuộc công ty/phòng ban.
 - Xóa danh mục cần xác nhận và chỉ thực hiện khi chưa có tài khoản liên kết, bao gồm khách/tài khoản khóa. Công ty phải xóa phòng ban trước. Không xóa tài khoản, đơn hay lịch sử tiền; mục đang mặc định được bỏ mặc định.
 - Xuất dữ liệu của tôi tạo JSON đầy đủ dữ liệu thuộc UID hiện tại; giữ file riêng tư. Khi nhập, hồ sơ và đơn chưa có/chưa thanh toán còn hợp lệ được khôi phục. Không ghi đè đơn, không giành tên của người khác và không tự cộng lại tiền/số dư.
