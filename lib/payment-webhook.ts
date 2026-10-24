@@ -50,6 +50,9 @@ class Store{
  async list(path:string):Promise<Document[]>{const all:Document[]=[];let page='';do{const result=await this.call('/'+path+'?pageSize=1000'+(page?'&pageToken='+encodeURIComponent(page):''),'GET');all.push(...(result.documents||[]));page=result.nextPageToken||'';if(all.length>1000)throw new Error('Invalid group size.');}while(page);return all;}
  create(path:string,fields:Record<string,Value>){return {update:{name:this.root+'/'+path,fields},currentDocument:{exists:false},updateTransforms:[{fieldPath:'createdAt',setToServerValue:'REQUEST_TIME'}]};}
 }
+// The existing restricted server identity can also attest immutable personal exports.
+// Callers' private data is read separately with their own verified ID token.
+export async function backupServiceStore(env:Record<string,string|undefined>){const config=configuration(env),auth=await identity(config);return {store:new Store(config,auth.token),uid:auth.uid};}
 function bankActivity(store:Store,uid:string,reference:string,details:unknown,dayId='',orderId=''){return store.create('activityLogs/'+randomUUID().replace(/-/g,''),{kind:stringValue('bank.received'),actorId:stringValue(uid),source:stringValue('bank'),summary:stringValue('Ngân hàng xác nhận thanh toán'),dayId:stringValue(dayId),orderId:stringValue(orderId),reference:stringValue(reference),details:stringValue(JSON.stringify(details))});}
 function matches(n:BankNotification,intent:Data,order:Data,bank:Data,link:Data,now:number){
  if(n.amount!==intent.amount)return 'amount_mismatch';
