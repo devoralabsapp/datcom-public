@@ -1,7 +1,7 @@
 import {applyCredit,chooseSurplus,creditBalances,CreditCoveredError} from '../lib/credit-client';
 import {activityValue,recordActivity} from '../lib/activity';
 import {readActivityPage,readActivityNames} from '../lib/activity-reader';
-import {initializeOrganization,readOrganization,saveOrganizationItem,setOrganizationDefault,savePersonalProfile,readPersonalProfile} from '../lib/organization';
+import {initializeOrganization,readOrganization,saveOrganizationItem,setOrganizationDefault,savePersonalProfile,readPersonalProfile,deleteOrganizationItem,resolveAffiliation} from '../lib/organization';
 import {exportPersonalBackup,importPersonalBackup,parsePersonalBackup,readImportedBackup,listPersonalImports,acknowledgeImport} from '../lib/personal-backup';
 import {summarizeStatistics} from '../lib/statistics';
 import {orderFinance} from '../lib/order-finance';
@@ -580,6 +580,38 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    await assertFails(setDoc(doc(admin.db,'departments','orphan'),{name:'Phòng mồ côi',active:true,companyId:'missing-company',createdAt:serverTimestamp(),updatedAt:serverTimestamp(),updatedBy:admin.auth.currentUser!.uid}));
    await saveOrganizationItem(admin,'company',{id:second,name:'Đổi tên công ty',active:false});assert.equal((await readOrganization(member)).companies.find(c=>c.id===second)?.name,'Đổi tên công ty');
    await assert.rejects(setOrganizationDefault(admin,second,department));await setOrganizationDefault(admin,catalog.defaultCompanyId,catalog.defaultDepartmentId);
+  });
+  await t.test('catalog deletion rejects every linked account including guests, Google users and blocked sessions',async()=>{
+   const profiles=[await client('delete-guest'),await client('delete-google','delete-google'),await client('delete-blocked')],orderBefore=(await getDoc(ref)).data();
+   for(let i=0;i<profiles.length;i++){
+    const owner=profiles[i],uid=owner.auth.currentUser!.uid,c=await saveOrganizationItem(admin,'company',{name:'Công ty có người '+i,active:true}),d=await saveOrganizationItem(admin,'department',{name:'Phòng có người '+i,companyId:c,active:true});
+    await savePersonalProfile(owner,{preferredName:'Tài khoản liên kết '+i,companyId:c,departmentId:d,phone:'',jobTitle:''});if(i===2)await setUserBlocked(admin,uid,true);
+    await assert.rejects(deleteOrganizationItem(owner,'department',d),/Chỉ quản trị/);
+    await assert.rejects(deleteOrganizationItem(admin,'department',d),/vẫn còn tài khoản/);await assert.rejects(deleteOrganizationItem(admin,'company',c),/vẫn còn tài khoản/);
+    const company=await getDoc(doc(admin.db,'companies',c)),department=await getDoc(doc(admin.db,'departments',d));assert.ok(company.exists()&&department.exists());assert.equal(company.data()?.deletionToken,undefined);assert.equal(department.data()?.deletionToken,undefined);
+    assert.equal((await readPersonalProfile(owner)).departmentId,d);const directory=await listManagedUsers(admin),person=directory.users.find(p=>p.uid===uid)!;assert.equal(person.companyId,c);assert.equal(person.departmentId,d);assert.ok(directory.organization.companies.some(v=>v.id===c));if(i===2)assert.equal(person.blocked,true);
+    await savePersonalProfile(owner,{preferredName:'Tài khoản liên kết '+i,companyId:'',departmentId:'',phone:'',jobTitle:''});await deleteOrganizationItem(admin,'department',d);await deleteOrganizationItem(admin,'company',c);
+   }
+   assert.deepEqual((await getDoc(ref)).data(),orderBefore);
+  });
+  await t.test('deletion locks block new membership, unauthorized deletion, invalid lock fields and default bypasses',async()=>{
+   const owner=await client('deletion-race'),publicDb=environment.unauthenticatedContext().firestore() as unknown as Firestore,c=await saveOrganizationItem(admin,'company',{name:'Công ty khóa xóa',active:true}),d=await saveOrganizationItem(admin,'department',{name:'Phòng khóa xóa',companyId:c,active:true}),cr=doc(admin.db,'companies',c),dr=doc(admin.db,'departments',d),token='a'.repeat(32);
+   await setOrganizationDefault(admin,c,d);await assertFails(deleteDoc(cr));await assertFails(deleteDoc(dr));await assertFails(deleteDoc(doc(owner.db,'departments',d)));await assertFails(deleteDoc(doc(publicDb,'companies',c)));
+   const lock={deletionToken:token,deletionStartedAt:serverTimestamp(),updatedAt:serverTimestamp(),updatedBy:admin.auth.currentUser!.uid};
+   await assertFails(updateDoc(doc(owner.db,'companies',c),{...lock,updatedBy:owner.auth.currentUser!.uid}));
+   for(const patch of [{deletionToken:'x'.repeat(33)},{deletionToken:12},{deletionStartedAt:Timestamp.fromMillis(0)},{deletionStartedAt:deleteField()},{extra:true}])await assertFails(updateDoc(cr,{...lock,...patch}));
+   await updateDoc(dr,lock);await assertFails(deleteDoc(dr));await assert.rejects(savePersonalProfile(owner,{preferredName:'Không được tham gia',companyId:c,departmentId:d,phone:'',jobTitle:''}));await assert.rejects(setOrganizationDefault(admin,c,d));
+   await assertFails(setDoc(doc(owner.db,'personalDetails',owner.auth.currentUser!.uid),{companyId:c,departmentId:d,phone:'',jobTitle:'',updatedAt:serverTimestamp()}));
+   await assert.rejects(deleteOrganizationItem(admin,'department',d),/đang được kiểm tra/);
+   await updateDoc(dr,{deletionToken:deleteField(),deletionStartedAt:deleteField(),updatedAt:serverTimestamp(),updatedBy:admin.auth.currentUser!.uid});
+   await updateDoc(cr,lock);await assert.rejects(savePersonalProfile(owner,{preferredName:'Không được tham gia công ty',companyId:c,departmentId:'',phone:'',jobTitle:''}));await assert.rejects(saveOrganizationItem(admin,'department',{name:'Phòng tạo khi khóa',companyId:c,active:true}));
+   await assert.rejects(saveOrganizationItem(admin,'department',{name:'Phòng ngừng tạo khi khóa',companyId:c,active:false}));
+   await updateDoc(cr,{deletionToken:deleteField(),deletionStartedAt:deleteField(),updatedAt:serverTimestamp(),updatedBy:admin.auth.currentUser!.uid});
+   await assert.rejects(deleteOrganizationItem(admin,'company',c),/xóa các phòng ban/);assert.equal((await getDoc(cr)).data()?.deletionToken,undefined);
+   await saveOrganizationItem(admin,'company',{id:c,name:'Công ty ngừng sử dụng',active:false});await deleteOrganizationItem(admin,'department',d);assert.equal((await getDoc(dr)).exists(),false);assert.equal((await getDoc(doc(admin.db,'settings','organization'))).data()?.defaultCompanyId,'');
+   await deleteOrganizationItem(admin,'company',c);assert.equal((await getDoc(cr)).exists(),false);const log=await getDocs(query(collection(admin.db,'activityLogs'),where('kind','==','organization.save')));assert.ok(log.docs.some(v=>JSON.parse(v.data().details).action==='delete'&&JSON.parse(v.data().details).id===c));
+   const org=await readOrganization(admin),first=org.departments.find(v=>v.active&&org.companies.find(c=>c.id===v.companyId)?.active)!;await setOrganizationDefault(admin,first.companyId,first.id);
+   assert.deepEqual(resolveAffiliation(org,{companyId:c,departmentId:d}),{companyId:'',departmentId:''});await assert.rejects(deleteOrganizationItem(admin,'company','invalid/id'));await assert.rejects(deleteOrganizationItem(admin,'company',c),/không còn tồn tại/);
   });
   await t.test('personal details remain private and cannot change roles, identity or invalid affiliation',async()=>{
    const owner=await client('personal-details-owner'),other=await client('personal-details-other'),uid=owner.auth.currentUser!.uid,org=await readOrganization(owner);
