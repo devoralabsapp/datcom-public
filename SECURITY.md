@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Use **GitHub private vulnerability reporting** on the [public repository's Security page](https://github.com/devoralabsapp/datcom-public/security/advisories/new). Include affected code, reproduction steps with fictitious data, and expected impact. Never publish tokens, banking notifications, real orders, or password-reset links in a public issue.
+Use **GitHub private vulnerability reporting** on the [public repository's Security page](https://github.com/devoralabsapp/lunch-together/security/advisories/new). Include affected code, reproduction steps with fictitious data, and expected impact. Never publish tokens, banking notifications, real orders, or password-reset links in a public issue.
 
 Maintenance is best-effort; there is no guaranteed response time or paid bug bounty. Security fixes target the current `main` branch. Older deployments should update after reviewing changes and Firestore Rules.
 

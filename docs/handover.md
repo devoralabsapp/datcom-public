@@ -33,8 +33,8 @@ Tạo Firebase project riêng, bật Firestore Standard, Anonymous và Google. D
 Yêu cầu Node.js **22**, npm và Java **21** để chạy Firebase Emulator. `package-lock.json` khóa phiên bản thư viện.
 
 ```text
-git clone https://github.com/devoralabsapp/datcom-public.git
-cd datcom-public
+git clone https://github.com/devoralabsapp/lunch-together.git
+cd lunch-together
 npm ci --include=dev --include=optional
 ```
 

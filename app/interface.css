@@ -189,6 +189,8 @@ small,label small{font-size:13px;color:var(--muted)}
 .language-switcher select:focus{outline:none;box-shadow:none}
 .signin>.language-switcher{margin-bottom:25px}
 html[lang=en] .app-shell .sidebar .nav-item{line-height:1.5}
+html[lang=en] .app-shell .brand>span:last-child{font-size:18px}
+@media(max-width:760px){html[lang=en] .app-shell .breadcrumb:before{content:'Lunch Together'}}
 @media(max-width:760px){.app-shell .topbar{flex-wrap:wrap}.app-shell .top-actions{margin-left:auto}.language-switcher{padding:0 5px;gap:3px;font-size:12px}.language-switcher>svg{display:none}.language-switcher select{max-width:100px;font-size:12px}.app-shell .breadcrumb:before{font-size:19px}.app-shell .top-actions>.icon-btn{width:32px}html[lang=en] .app-shell .nav-short-label{font-size:11px}html[lang=en] .app-shell .nav-item{padding-inline:2px}}
 
 /* Compact navigation keeps the full menu visible on standard desktop heights. */

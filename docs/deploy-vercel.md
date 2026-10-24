@@ -28,7 +28,7 @@ Các truy vấn chỉ dùng index đơn tự động; không cần tạo composi
 
 ## 3. Cấu hình Vercel
 
-Import repo `datcom-public` của bạn, Framework Next.js, Node.js 22, Root Directory mặc định. Các lệnh install/build đã có trong `vercel.json`.
+Import repo `lunch-together` của bạn, Framework Next.js, Node.js 22, Root Directory mặc định. Các lệnh install/build đã có trong `vercel.json`.
 
 Thêm các biến sau vào Vercel → Settings → Environment Variables từ Firebase Project settings → Your apps → Web config:
 
