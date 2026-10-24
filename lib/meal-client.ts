@@ -38,7 +38,7 @@ export class MealClient{
  }
  async read(dayId?:string){
   const user=await ensureUser(this.auth);
-  const [admin,daysSnapshot,payment,blocked,credits]=await Promise.all([this.isAdmin(),getDocs(query(collection(this.db,'days'),orderBy('date','desc'),limit(366))),getDoc(doc(this.db,'settings','payment')),ownAccess(this),creditBalances(this)]);
+  const [admin,daysSnapshot,payment,blocked,credits,profile]=await Promise.all([this.isAdmin(),getDocs(query(collection(this.db,'days'),orderBy('date','desc'),limit(366))),getDoc(doc(this.db,'settings','payment')),ownAccess(this),creditBalances(this),getDoc(doc(this.db,'userProfiles',user.uid))]);
   const days=new Map(this.source.days.map(d=>[d.id,d]));
   for(const d of daysSnapshot.docs){const data=d.data();days.set(d.id,{id:d.id,date:data.date,label:data.label,menu:[],menuCount:data.menuCount,source:false,status:data.status});}
   const now=new Date(),list=mealDays([...days.values()],now);
@@ -53,7 +53,7 @@ export class MealClient{
    const allOrders=orderSnapshot.docs.map(d=>{const o=d.data();return {id:d.id,dayId:day.id,name:o.name,dish:o.dish,price:o.price,quantity:o.quantity,note:o.note,paid:o.paid,...moneyFields(o as never),cancelled:o.cancelled,actor:o.ownerId,updatedAt:o.updatedAt?.toDate().toISOString()||'',canEdit:admin||o.ownerId===user.uid};});orders=allOrders.filter(o=>!o.cancelled);cancelledOrders=allOrders.filter(o=>o.cancelled);
   }
   const qr=payment.data()?.qrUrl;
-  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,cancelledOrders,creditBalances:credits,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
+  return {...this.source,days:[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)),day,orders,cancelledOrders,creditBalances:credits,members:[],admin,userId:user.uid,locked:isLocked(day),blocked,signedIn:!user.isAnonymous,displayName:profile.data()?.preferredName||user.displayName||user.email||'Khách',storageReady:published,paymentAvailable:isBankAccount(payment.data())||(typeof qr==='string'&&!!qr),paymentUrl:typeof qr==='string'?qr:''};
  }
  async write(body:Record<string,unknown>){
   const user=await ensureUser(this.auth),admin=await this.isAdmin();

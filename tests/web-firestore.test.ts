@@ -1,6 +1,8 @@
 import {applyCredit,chooseSurplus,creditBalances,CreditCoveredError} from '../lib/credit-client';
 import {activityValue,recordActivity} from '../lib/activity';
 import {readActivityPage,readActivityNames} from '../lib/activity-reader';
+import {initializeOrganization,readOrganization,saveOrganizationItem,setOrganizationDefault,savePersonalProfile,readPersonalProfile} from '../lib/organization';
+import {exportPersonalBackup,importPersonalBackup,parsePersonalBackup,readImportedBackup,listPersonalImports,acknowledgeImport} from '../lib/personal-backup';
 import {summarizeStatistics} from '../lib/statistics';
 import {orderFinance} from '../lib/order-finance';
 import test from 'node:test';
@@ -562,5 +564,64 @@ test('Web SDK and Security Rules enforce the complete meal flow',{timeout:240000
    const a=(await getDoc(doc(payer.db,'days',dayId,'orders',sourceId))).data()!,b=(await getDoc(doc(payer.db,'days',dayId,'orders',target.id))).data()!;assert.equal(a.receivedAmount,50000);assert.equal(a.voidedAmount,40000);assert.equal(a.creditOutAmount,10000);assert.equal(b.creditInAmount,10000);assert.equal(orderFinance(a as never).held,0);
   });
 
+  await t.test('company and department administration validates schemas, references, immutable fields and defaults',async()=>{
+   const member=await client('department-member'),publicDb=environment.unauthenticatedContext().firestore() as unknown as Firestore;
+   await assert.rejects(initializeOrganization(member,'Công ty mẫu','Phòng mẫu'));
+   await initializeOrganization(admin,'Công ty mẫu','Phòng mẫu');const catalog=await readOrganization(member);assert.equal(catalog.companies.length,1);assert.equal(catalog.departments[0].companyId,catalog.companies[0].id);assert.equal(catalog.defaultCompanyId,catalog.companies[0].id);
+   await assert.rejects(initializeOrganization(admin,'Trùng cấu hình','Phòng trùng'));
+   const second=await saveOrganizationItem(admin,'company',{name:'Công ty thứ hai',active:true}),department=await saveOrganizationItem(admin,'department',{name:'Phòng thứ hai',active:true,companyId:second});
+   await setOrganizationDefault(admin,second,department);assert.equal((await readOrganization(member)).defaultDepartmentId,department);
+   await assert.rejects(setOrganizationDefault(admin,catalog.defaultCompanyId,department));
+   await assertFails(getDocs(collection(publicDb,'companies')));await assertFails(getDoc(doc(publicDb,'settings','organization')));
+   const companyRef=doc(admin.db,'companies',second),old=(await getDoc(companyRef)).data()!;
+   await assertFails(setDoc(doc(member.db,'companies','spoof'),{...old,updatedBy:member.auth.currentUser!.uid,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));
+   for(const patch of [{name:'x'.repeat(101)},{active:'yes'},{extra:'pollution'},{updatedBy:member.auth.currentUser!.uid},{createdAt:Timestamp.fromMillis(0)}])await assertFails(updateDoc(companyRef,{...patch,updatedAt:serverTimestamp()}));
+   await assertFails(updateDoc(doc(admin.db,'departments',department),{companyId:catalog.defaultCompanyId,updatedAt:serverTimestamp()}));await assertFails(deleteDoc(companyRef));
+   await assertFails(setDoc(doc(admin.db,'departments','orphan'),{name:'Phòng mồ côi',active:true,companyId:'missing-company',createdAt:serverTimestamp(),updatedAt:serverTimestamp(),updatedBy:admin.auth.currentUser!.uid}));
+   await saveOrganizationItem(admin,'company',{id:second,name:'Đổi tên công ty',active:false});assert.equal((await readOrganization(member)).companies.find(c=>c.id===second)?.name,'Đổi tên công ty');
+   await assert.rejects(setOrganizationDefault(admin,second,department));await setOrganizationDefault(admin,catalog.defaultCompanyId,catalog.defaultDepartmentId);
+  });
+  await t.test('personal details remain private and cannot change roles, identity or invalid affiliation',async()=>{
+   const owner=await client('personal-details-owner'),other=await client('personal-details-other'),uid=owner.auth.currentUser!.uid,org=await readOrganization(owner);
+   const input={preferredName:'Người dùng hồ sơ mẫu',phone:'+84 900 123 456',jobTitle:'Kỹ sư mẫu',companyId:org.defaultCompanyId,departmentId:org.defaultDepartmentId};
+   await savePersonalProfile(owner,input);const profile=await readPersonalProfile(owner);assert.equal(profile.preferredName,input.preferredName);assert.equal(profile.phone,input.phone);await syncUserProfile(owner);assert.equal((await readPersonalProfile(owner)).departmentId,input.departmentId);
+   assert.equal((await getDoc(doc(admin.db,'personalDetails',uid))).data()?.phone,input.phone);
+   await assertFails(getDoc(doc(other.db,'personalDetails',uid)));await assertFails(getDocs(collection(owner.db,'personalDetails')));
+   await assertFails(getDoc(doc(environment.unauthenticatedContext().firestore() as unknown as Firestore,'personalDetails',uid)));
+   await assertFails(setDoc(doc(admin.db,'personalDetails',uid),{...input,updatedAt:serverTimestamp()}));
+   const ref=doc(owner.db,'personalDetails',uid);
+   for(const patch of [{phone:'x'.repeat(31)},{phone:'not-a-phone'},{jobTitle:'x'.repeat(101)},{companyId:''},{departmentId:'orphan'},{updatedAt:Timestamp.fromMillis(0)},{admin:true},{phone:123}])await assertFails(updateDoc(ref,{updatedAt:serverTimestamp(),...patch}));
+   await assertFails(setDoc(doc(other.db,'personalDetails',uid),{companyId:'',departmentId:'',phone:'',jobTitle:'',updatedAt:serverTimestamp()}));await assertFails(deleteDoc(ref));
+   const unchanged=(await getDoc(doc(owner.db,'userProfiles',uid))).data()!;assert.equal(unchanged.provider,'anonymous');assert.equal(unchanged.email,'');assert.equal(unchanged.preferredName,input.preferredName);await assert.rejects(savePersonalProfile(owner,{...input,companyId:'missing-company'}));
+  });
+  await t.test('personal JSON round trips restore only missing unpaid orders, retain history and cannot replay money',async()=>{
+   const owner=await client('backup-owner'),other=await client('backup-other'),uid=owner.auth.currentUser!.uid,day='day-2099-12-20';
+   await admin.write({action:'day',create:true,date:'2099-12-20',menu,status:'open'});await savePersonalProfile(owner,{preferredName:'Sao lưu mẫu',phone:'0900123456',jobTitle:'',companyId:'',departmentId:''});
+   const unpaid=await owner.write({action:'order',dayId:day,name:'Sao lưu chưa trả',dish:menu[0].name,quantity:2}),unpaidId=unpaid.orders.find(o=>o.name==='Sao lưu chưa trả')!.id;
+   const paid=await owner.write({action:'order',dayId:day,name:'Sao lưu đã trả',dish:menu[1].name}),paidId=paid.orders.find(o=>o.name==='Sao lưu đã trả')!.id;await admin.write({action:'paid',dayId:day,id:paidId,paid:true});await owner.write({action:'cancel',dayId:day,id:paidId});await chooseSurplus(owner,{dayId:day,orderId:paidId},'carry');
+   await other.write({action:'order',dayId:day,name:'Đơn riêng người khác',dish:menu[0].name});await recordActivity(other,{kind:'app.visit',summary:'Hoạt động người khác'});
+   const raw=await exportPersonalBackup(owner),backup=parsePersonalBackup(raw);assert.equal(backup.orders.length,2);assert.ok(backup.orders.every(o=>o.order.ownerId===uid));assert.ok(backup.activity.every(o=>o.actorId===uid));assert.ok(backup.orders.find(o=>o.orderId===paidId)!.financialEvents.length>0);assert.ok(!raw.includes('Đơn riêng người khác'));assert.ok(!raw.includes('refreshToken'));assert.ok(!raw.includes('apiKey'));
+   const moneyBefore=(await getDoc(doc(owner.db,'days',day,'orders',paidId))).data()!,creditBefore=(await creditBalances(owner))[uid];
+   await environment.withSecurityRulesDisabled(async c=>{const db=c.firestore() as unknown as Firestore;await deleteDoc(doc(db,'days',day,'orders',unpaidId));});
+   const restored=await importPersonalBackup(owner,raw);assert.equal(restored.restored,1);assert.equal(restored.review,1);assert.equal(restored.skipped,0);assert.equal(await readImportedBackup(owner,restored.id),raw);
+   const repeated=await importPersonalBackup(owner,raw);assert.equal(repeated.restored,0);assert.equal(repeated.existing,1);assert.equal(repeated.id,restored.id);
+   assert.deepEqual((await getDoc(doc(owner.db,'days',day,'orders',paidId))).data(),moneyBefore);assert.equal((await creditBalances(owner))[uid],creditBefore);
+   assert.equal((await getDoc(doc(owner.db,'days',day,'orders',unpaidId))).data()?.quantity,2);assert.equal((await getDoc(doc(owner.db,'days',day,'orders',unpaidId))).data()?.receivedAmount,0);
+   await assertFails(getDoc(doc(other.db,'personalImports',restored.id)));await assertFails(getDocs(collection(owner.db,'personalImports')));await assertFails(getDocs(query(collection(other.db,'personalImports'),where('ownerId','==',uid))));await assertFails(getDoc(doc(other.db,'personalImports',restored.id,'chunks','0')));await assert.rejects(listPersonalImports(owner,true));
+   const manifest=doc(owner.db,'personalImports',restored.id);for(const patch of [{ownerId:other.auth.currentUser!.uid},{sourceUid:other.auth.currentUser!.uid},{fileHash:'a'.repeat(64)},{chunkCount:71},{state:'reviewed',reviewedBy:uid},{orderCount:'2'},{reviewNote:'x'.repeat(1001)},{bytes:10000001},{createdAt:Timestamp.fromMillis(0)}])await assertFails(updateDoc(manifest,{...patch,updatedAt:serverTimestamp()}));
+   await assertFails(updateDoc(doc(owner.db,'personalImports',restored.id,'chunks','0'),{data:'changed'}));await assertFails(deleteDoc(manifest));await assert.rejects(acknowledgeImport(owner,restored.id,'Không có quyền'));
+   await acknowledgeImport(admin,restored.id,'Đã đối chiếu sổ; không cộng lại số dư.');assert.equal((await listPersonalImports(owner))[0].state,'reviewed');assert.equal((await creditBalances(owner))[uid],creditBefore);await assertFails(updateDoc(manifest,{state:'pending',updatedAt:serverTimestamp()}));
+   const forged=structuredClone(backup);forged.orders.find(o=>o.orderId===paidId)!.order.receivedAmount=9000000;const forgedImport=await importPersonalBackup(owner,JSON.stringify(forged));assert.equal(forgedImport.review,1);assert.equal((await creditBalances(owner))[uid],creditBefore);assert.deepEqual((await getDoc(doc(owner.db,'days',day,'orders',paidId))).data(),moneyBefore);
+  });
+  await t.test('restore preserves existing orders, refuses foreign names and closed menus, and archive chunks are bounded',async()=>{
+   const owner=await client('restore-conflict'),recipient=await client('restore-recipient'),uid=owner.auth.currentUser!.uid,day='day-2099-12-21';await admin.write({action:'day',create:true,date:'2099-12-21',menu,status:'open'});
+   await owner.write({action:'order',dayId:day,name:'Tên đã giữ',dish:menu[0].name});const raw=await exportPersonalBackup(owner),backup=parsePersonalBackup(raw);
+   const conflict=await importPersonalBackup(recipient,raw);assert.equal(conflict.restored,0);assert.equal(conflict.skipped,1);assert.equal((await getDoc(doc(owner.db,'days',day,'orders',backup.orders[0].orderId))).data()?.ownerId,uid);
+   await admin.write({action:'day',dayId:day,menu,status:'closed'});await environment.withSecurityRulesDisabled(async c=>{await deleteDoc(doc(c.firestore() as unknown as Firestore,'days',day,'orders',backup.orders[0].orderId));});const closed=await importPersonalBackup(owner,raw);assert.equal(closed.restored,0);assert.equal(closed.skipped,1);
+   const blankOwner=await client('blank-backup-owner'),blankRaw=await exportPersonalBackup(blankOwner);assert.equal(parsePersonalBackup(blankRaw).orders.length,0);const concurrent=await Promise.all([importPersonalBackup(blankOwner,blankRaw),importPersonalBackup(blankOwner,blankRaw)]);assert.equal(concurrent[0].id,concurrent[1].id);assert.equal((await listPersonalImports(blankOwner)).length,1);
+   const fileHash='f'.repeat(64),id=uid+'~'+fileHash,ref=doc(owner.db,'personalImports',id),value={ownerId:uid,sourceUid:uid,fileHash,bytes:10,chunkCount:1,orderCount:0,moneyCount:0,restoredCount:0,skippedCount:0,state:'uploading',reviewedBy:'',reviewNote:'',createdAt:serverTimestamp(),updatedAt:serverTimestamp()};await setDoc(ref,value);
+   const chunk={index:0,data:'valid',createdAt:serverTimestamp()};await assertFails(setDoc(doc(recipient.db,'personalImports',id,'chunks','0'),chunk));await assertFails(setDoc(doc(owner.db,'personalImports',id,'chunks','1'),{...chunk,index:1}));await assertFails(setDoc(doc(owner.db,'personalImports',id,'chunks','0'),{...chunk,data:'x'.repeat(150001)}));await assertFails(setDoc(doc(owner.db,'personalImports',uid+'~'+'e'.repeat(64),'chunks','0'),chunk));
+   await setDoc(doc(owner.db,'personalImports',id,'chunks','0'),chunk);await updateDoc(ref,{state:'ready',updatedAt:serverTimestamp()});await assert.rejects(readImportedBackup(owner,id),/chưa đầy đủ/);
+  });
  }finally{const coverage=await fetch(`http://${host}:${port}/emulator/v1/projects/${project}:ruleCoverage`);fs.mkdirSync('.firebase',{recursive:true});fs.writeFileSync('.firebase/rules-coverage.json',await coverage.text());await Promise.all(databases.map(db=>terminate(db)));await Promise.all(apps.map(app=>deleteApp(app)));await environment.cleanup();}
 });
